@@ -4,7 +4,7 @@
 //! - While the owner is alive, only the owner can request MPC signatures.
 //! - Once the deadline passes, the switch is final: each heir can request
 //!   signatures only for their own paths (`heir:<account>:<label>`) and claim
-//!   their share of the contract's NEAR Intents balances.
+//!   their share of the contract's native NEAR and NEAR Intents balances.
 //!
 //! The contract holds no private keys. It only decides *when* the MPC network
 //! may sign and *when* Intents balances may move.
@@ -12,8 +12,8 @@
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::{self, json};
 use near_sdk::{
-    env, near, require, AccountId, Gas, GasWeight, NearToken, PanicOnDefault, Promise,
-    PromiseOrValue,
+    AccountId, Gas, GasWeight, NearToken, PanicOnDefault, Promise, PromiseOrValue, env, near,
+    require,
 };
 use std::collections::BTreeMap;
 
@@ -79,6 +79,21 @@ pub struct Contract {
     paid: BTreeMap<String, u128>,
     /// token_id -> heirs who claimed (or whose claim is in flight).
     claimed: BTreeMap<String, Vec<AccountId>>,
+    /// Native NEAR deposited by the owner for the heirs. Tracked separately from
+    /// the contract's balance, so payouts never touch the NEAR the contract
+    /// keeps for its own storage.
+    near_pool: u128,
+    near_snapshot: Option<u128>,
+    near_paid: u128,
+    near_claimed: Vec<AccountId>,
+}
+
+#[near(serializers = [json])]
+pub struct NearInfo {
+    pub pool: U128,
+    pub snapshot: Option<U128>,
+    pub paid: U128,
+    pub claimed_by: Vec<AccountId>,
 }
 
 #[near]
@@ -108,6 +123,10 @@ impl Contract {
             snapshots: BTreeMap::new(),
             paid: BTreeMap::new(),
             claimed: BTreeMap::new(),
+            near_pool: 0,
+            near_snapshot: None,
+            near_paid: 0,
+            near_claimed: Vec::new(),
         }
     }
 
@@ -155,7 +174,10 @@ impl Contract {
             self.owner_check_in();
         } else {
             require!(self.is_triggered(), "Deadline not reached");
-            require!(self.is_heir(&caller), "Only the owner or an heir can request signatures");
+            require!(
+                self.is_heir(&caller),
+                "Only the owner or an heir can request signatures"
+            );
             require!(
                 path.starts_with(&heir_path_prefix(&caller)),
                 "Heirs can only sign for their own paths"
@@ -280,6 +302,62 @@ impl Contract {
     }
 
     // ------------------------------------------------------------------
+    // Native NEAR
+    // ------------------------------------------------------------------
+
+    /// Owner deposits NEAR for the heirs (attach it with --deposit).
+    #[payable]
+    pub fn deposit_near(&mut self) -> U128 {
+        self.owner_check_in();
+        let amount = env::attached_deposit().as_yoctonear();
+        require!(amount > 0, "Attach the NEAR to deposit");
+        self.near_pool += amount;
+        U128(self.near_pool)
+    }
+
+    /// Owner takes deposited NEAR back while still alive.
+    pub fn owner_withdraw_near(&mut self, amount: U128) -> Promise {
+        self.owner_check_in();
+        require!(
+            amount.0 > 0 && amount.0 <= self.near_pool,
+            "Amount exceeds the deposited NEAR"
+        );
+        self.near_pool -= amount.0;
+        Promise::new(self.owner.clone()).transfer(NearToken::from_yoctonear(amount.0))
+    }
+
+    /// After the deadline, an heir claims their share of the deposited NEAR.
+    /// It is sent straight to the heir's NEAR account.
+    pub fn claim_near(&mut self) -> U128 {
+        require!(self.is_triggered(), "Deadline not reached");
+        let heir = env::predecessor_account_id();
+        require!(self.is_heir(&heir), "Only heirs can claim");
+        require!(!self.near_claimed.contains(&heir), "Already claimed NEAR");
+        U128(self.pay_near_share(heir))
+    }
+
+    /// After the deadline, anyone can push the NEAR payouts to every heir who
+    /// hasn't claimed yet, so heirs don't have to do anything themselves.
+    pub fn distribute_near(&mut self) -> U128 {
+        require!(self.is_triggered(), "Deadline not reached");
+        let pending: Vec<AccountId> = self
+            .heirs
+            .iter()
+            .map(|h| h.account_id.clone())
+            .filter(|a| !self.near_claimed.contains(a))
+            .collect();
+        require!(
+            !pending.is_empty(),
+            "Every heir has already received their NEAR"
+        );
+        let mut total = 0;
+        for heir in pending {
+            total += self.pay_near_share(heir);
+        }
+        U128(total)
+    }
+
+    // ------------------------------------------------------------------
     // Views (free, read-only)
     // ------------------------------------------------------------------
 
@@ -308,6 +386,15 @@ impl Contract {
         }
     }
 
+    pub fn near_info(&self) -> NearInfo {
+        NearInfo {
+            pool: U128(self.near_pool),
+            snapshot: self.near_snapshot.map(U128),
+            paid: U128(self.near_paid),
+            claimed_by: self.near_claimed.clone(),
+        }
+    }
+
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
@@ -328,8 +415,14 @@ impl Contract {
     /// resets the timer. Once triggered, the switch is final: this protects
     /// heirs if the owner's key is stolen after death.
     fn owner_check_in(&mut self) {
-        require!(env::predecessor_account_id() == self.owner, "Only the owner can do this");
-        require!(!self.is_triggered(), "Switch already triggered; owner actions are disabled");
+        require!(
+            env::predecessor_account_id() == self.owner,
+            "Only the owner can do this"
+        );
+        require!(
+            !self.is_triggered(),
+            "Switch already triggered; owner actions are disabled"
+        );
         self.last_ping_ns = env::block_timestamp();
     }
 
@@ -338,19 +431,7 @@ impl Contract {
         let already_paid = *self.paid.get(&token_id).unwrap_or(&0);
         let claims = self.claimed.get(&token_id).map(|l| l.len()).unwrap_or(0);
 
-        let amount = if claims >= self.heirs.len() {
-            // Last heir: everything left, including rounding dust.
-            snapshot.saturating_sub(already_paid)
-        } else {
-            let bps = self
-                .heirs
-                .iter()
-                .find(|h| h.account_id == heir)
-                .map(|h| h.share_bps)
-                .unwrap_or(0) as u128;
-            snapshot / BPS_TOTAL as u128 * bps
-                + (snapshot % BPS_TOTAL as u128) * bps / BPS_TOTAL as u128
-        };
+        let amount = self.share_amount(snapshot, already_paid, claims, &heir);
 
         if amount == 0 {
             return PromiseOrValue::Value(U128(0));
@@ -365,6 +446,43 @@ impl Contract {
                     .on_transfer(token_id, heir, U128(amount)),
             ),
         )
+    }
+
+    /// An heir's share of `snapshot`. `claims` counts this heir's claim too:
+    /// the last heir to claim gets everything left, including rounding dust.
+    fn share_amount(
+        &self,
+        snapshot: u128,
+        already_paid: u128,
+        claims: usize,
+        heir: &AccountId,
+    ) -> u128 {
+        if claims >= self.heirs.len() {
+            return snapshot.saturating_sub(already_paid);
+        }
+        let bps = self
+            .heirs
+            .iter()
+            .find(|h| &h.account_id == heir)
+            .map(|h| h.share_bps)
+            .unwrap_or(0) as u128;
+        snapshot / BPS_TOTAL as u128 * bps
+            + (snapshot % BPS_TOTAL as u128) * bps / BPS_TOTAL as u128
+    }
+
+    /// Pays one heir's NEAR share (snapshotting the pool on the first payout).
+    fn pay_near_share(&mut self, heir: AccountId) -> u128 {
+        let snapshot = *self.near_snapshot.get_or_insert(self.near_pool);
+        self.near_claimed.push(heir.clone());
+        let amount = self.share_amount(snapshot, self.near_paid, self.near_claimed.len(), &heir);
+        if amount > 0 {
+            self.near_paid += amount;
+            self.near_pool -= amount;
+            Promise::new(heir)
+                .transfer(NearToken::from_yoctonear(amount))
+                .detach();
+        }
+        amount
     }
 
     fn mt_transfer(&self, receiver_id: AccountId, token_id: &str, amount: u128) -> Promise {
@@ -447,7 +565,11 @@ mod tests {
         Contract::new(
             acc("thalderg.testnet"),
             TIMEOUT,
-            vec![acc("anna.testnet"), acc("marco.testnet"), acc("luca.testnet")],
+            vec![
+                acc("anna.testnet"),
+                acc("marco.testnet"),
+                acc("luca.testnet"),
+            ],
             acc("v1.signer-prod.testnet"),
             acc("intents.near"),
         )
@@ -547,7 +669,10 @@ mod tests {
     #[test]
     fn heir_path_view() {
         let c = setup();
-        assert_eq!(c.heir_path(acc("anna.testnet"), "eth".into()), "heir:anna.testnet:eth");
+        assert_eq!(
+            c.heir_path(acc("anna.testnet"), "eth".into()),
+            "heir:anna.testnet:eth"
+        );
     }
 
     #[test]
@@ -578,13 +703,99 @@ mod tests {
         let _ = c.pay_share(token.clone(), acc("anna.testnet"));
         assert_eq!(c.paid[&token], 333_300); // 33.33%
 
-        c.claimed.get_mut(&token).unwrap().push(acc("marco.testnet"));
+        c.claimed
+            .get_mut(&token)
+            .unwrap()
+            .push(acc("marco.testnet"));
         let _ = c.pay_share(token.clone(), acc("marco.testnet"));
         assert_eq!(c.paid[&token], 666_600);
 
         c.claimed.get_mut(&token).unwrap().push(acc("luca.testnet"));
         let _ = c.pay_share(token.clone(), acc("luca.testnet"));
         assert_eq!(c.paid[&token], 1_000_001); // last heir takes the rest
+    }
+
+    fn ctx_with_deposit(caller: &str, now: u64, deposit: u128) {
+        let mut b = VMContextBuilder::new();
+        b.current_account_id(acc("deadswitch.thalderg.testnet"))
+            .predecessor_account_id(acc(caller))
+            .block_timestamp(now)
+            .attached_deposit(NearToken::from_yoctonear(deposit));
+        testing_env!(b.build());
+    }
+
+    #[test]
+    fn owner_deposits_and_withdraws_near() {
+        let mut c = setup();
+        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000);
+        assert_eq!(c.deposit_near().0, 1_000);
+        ctx("thalderg.testnet", T0 + 2 * SEC);
+        let _ = c.owner_withdraw_near(U128(400));
+        assert_eq!(c.near_info().pool.0, 600);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the owner can do this")]
+    fn stranger_cannot_deposit_near() {
+        let mut c = setup();
+        ctx_with_deposit("stranger.testnet", T0 + SEC, 1_000);
+        c.deposit_near();
+    }
+
+    #[test]
+    #[should_panic(expected = "Amount exceeds the deposited NEAR")]
+    fn owner_cannot_withdraw_more_than_deposited() {
+        let mut c = setup();
+        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000);
+        c.deposit_near();
+        ctx("thalderg.testnet", T0 + 2 * SEC);
+        let _ = c.owner_withdraw_near(U128(1_001));
+    }
+
+    #[test]
+    fn heirs_claim_near_and_last_gets_remainder() {
+        let mut c = setup();
+        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000_001);
+        c.deposit_near();
+        ctx("anna.testnet", T0 + SEC + TIMEOUT * SEC);
+        assert_eq!(c.claim_near().0, 333_300);
+        ctx("marco.testnet", T0 + SEC + TIMEOUT * SEC);
+        assert_eq!(c.claim_near().0, 333_300);
+        ctx("luca.testnet", T0 + SEC + TIMEOUT * SEC);
+        assert_eq!(c.claim_near().0, 333_401);
+        assert_eq!(c.near_info().pool.0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Already claimed NEAR")]
+    fn double_near_claim_refused() {
+        let mut c = setup();
+        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000);
+        c.deposit_near();
+        ctx("anna.testnet", T0 + SEC + TIMEOUT * SEC);
+        c.claim_near();
+        c.claim_near();
+    }
+
+    #[test]
+    #[should_panic(expected = "Deadline not reached")]
+    fn near_claim_refused_before_deadline() {
+        let mut c = setup();
+        ctx("anna.testnet", T0 + SEC);
+        c.claim_near();
+    }
+
+    #[test]
+    fn anyone_can_distribute_near_to_remaining_heirs() {
+        let mut c = setup();
+        ctx_with_deposit("thalderg.testnet", T0 + SEC, 900);
+        c.deposit_near();
+        ctx("anna.testnet", T0 + SEC + TIMEOUT * SEC);
+        assert_eq!(c.claim_near().0, 299); // 33.33% of 900, rounded down
+        ctx("stranger.testnet", T0 + SEC + TIMEOUT * SEC);
+        assert_eq!(c.distribute_near().0, 601); // marco 299 + luca 302
+        assert_eq!(c.near_info().paid.0, 900);
+        assert_eq!(c.near_info().claimed_by.len(), 3);
     }
 
     #[test]
