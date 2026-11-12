@@ -12,8 +12,8 @@
 use near_sdk::json_types::U128;
 use near_sdk::serde_json::{self, json};
 use near_sdk::{
-    AccountId, Gas, GasWeight, NearToken, PanicOnDefault, Promise, PromiseOrValue, env, near,
-    require,
+    env, near, require, AccountId, Gas, GasWeight, NearToken, PanicOnDefault, Promise,
+    PromiseOrValue,
 };
 use std::collections::BTreeMap;
 
@@ -25,8 +25,11 @@ const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 /// transaction is added on top (GasWeight), so callers should attach 300 Tgas.
 const GAS_SIGN: Gas = Gas::from_tgas(50);
 const GAS_MT_BALANCE: Gas = Gas::from_tgas(10);
-const GAS_MT_TRANSFER: Gas = Gas::from_tgas(30);
+const GAS_MT_TRANSFER: Gas = Gas::from_tgas(50);
 const GAS_CALLBACK: Gas = Gas::from_tgas(40);
+/// on_balance runs itself (~10 Tgas) and then schedules mt_transfer + on_transfer,
+/// so it needs more than the sum of those two.
+const GAS_ON_BALANCE: Gas = Gas::from_tgas(120);
 
 /// ECDSA payloads are a 32-byte hash (64 hex chars). EdDSA payloads are the
 /// full message bytes; a Solana transaction is at most 1232 bytes.
@@ -152,10 +155,7 @@ impl Contract {
             self.owner_check_in();
         } else {
             require!(self.is_triggered(), "Deadline not reached");
-            require!(
-                self.is_heir(&caller),
-                "Only the owner or an heir can request signatures"
-            );
+            require!(self.is_heir(&caller), "Only the owner or an heir can request signatures");
             require!(
                 path.starts_with(&heir_path_prefix(&caller)),
                 "Heirs can only sign for their own paths"
@@ -237,7 +237,7 @@ impl Contract {
                 )
                 .then(
                     Self::ext(env::current_account_id())
-                        .with_static_gas(GAS_CALLBACK.saturating_add(GAS_MT_TRANSFER))
+                        .with_static_gas(GAS_ON_BALANCE)
                         .on_balance(token_id, heir),
                 ),
         )
@@ -328,14 +328,8 @@ impl Contract {
     /// resets the timer. Once triggered, the switch is final: this protects
     /// heirs if the owner's key is stolen after death.
     fn owner_check_in(&mut self) {
-        require!(
-            env::predecessor_account_id() == self.owner,
-            "Only the owner can do this"
-        );
-        require!(
-            !self.is_triggered(),
-            "Switch already triggered; owner actions are disabled"
-        );
+        require!(env::predecessor_account_id() == self.owner, "Only the owner can do this");
+        require!(!self.is_triggered(), "Switch already triggered; owner actions are disabled");
         self.last_ping_ns = env::block_timestamp();
     }
 
@@ -453,11 +447,7 @@ mod tests {
         Contract::new(
             acc("thalderg.testnet"),
             TIMEOUT,
-            vec![
-                acc("anna.testnet"),
-                acc("marco.testnet"),
-                acc("luca.testnet"),
-            ],
+            vec![acc("anna.testnet"), acc("marco.testnet"), acc("luca.testnet")],
             acc("v1.signer-prod.testnet"),
             acc("intents.near"),
         )
@@ -557,10 +547,7 @@ mod tests {
     #[test]
     fn heir_path_view() {
         let c = setup();
-        assert_eq!(
-            c.heir_path(acc("anna.testnet"), "eth".into()),
-            "heir:anna.testnet:eth"
-        );
+        assert_eq!(c.heir_path(acc("anna.testnet"), "eth".into()), "heir:anna.testnet:eth");
     }
 
     #[test]
@@ -591,10 +578,7 @@ mod tests {
         let _ = c.pay_share(token.clone(), acc("anna.testnet"));
         assert_eq!(c.paid[&token], 333_300); // 33.33%
 
-        c.claimed
-            .get_mut(&token)
-            .unwrap()
-            .push(acc("marco.testnet"));
+        c.claimed.get_mut(&token).unwrap().push(acc("marco.testnet"));
         let _ = c.pay_share(token.clone(), acc("marco.testnet"));
         assert_eq!(c.paid[&token], 666_600);
 
