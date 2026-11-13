@@ -1,19 +1,22 @@
-//! Deadswitch: a cross-chain dead man's switch on NEAR.
+//! Deadswitch v2: crypto inheritance on NEAR Intents.
+//!
+//! The owner keeps their funds in their own NEAR Intents account and registers
+//! one extra key on it: a key derived by NEAR Chain Signatures from this
+//! contract's account and the path `estate:intents`. Nobody holds that key;
+//! only the MPC network can sign with it, and only when this contract asks.
 //!
 //! - The owner checks in with `ping()` (any owner action also counts).
-//! - While the owner is alive, only the owner can request MPC signatures.
-//! - Once the deadline passes, the switch is final: each heir can request
-//!   signatures only for their own paths (`heir:<account>:<label>`) and claim
-//!   their share of the contract's native NEAR and NEAR Intents balances.
-//!
-//! The contract holds no private keys. It only decides *when* the MPC network
-//! may sign and *when* Intents balances may move.
+//! - While the owner is alive, the contract never uses the key.
+//! - Once the deadline passes, the switch is final. Anyone can call `sweep`:
+//!   the contract writes one transfer intent that pays each heir their share
+//!   straight from the owner's Intents account, has the MPC network sign it,
+//!   and submits it to NEAR Intents. Funds never pass through this contract.
 
-use near_sdk::json_types::U128;
-use near_sdk::serde_json::{self, json};
+use near_sdk::json_types::{Base64VecU8, U128};
+use near_sdk::serde_json::{self, json, Value};
 use near_sdk::{
-    AccountId, Gas, GasWeight, NearToken, PanicOnDefault, Promise, PromiseOrValue, env, near,
-    require,
+    env, near, require, AccountId, Gas, GasWeight, NearToken, PanicOnDefault, Promise,
+    PromiseOrValue,
 };
 use std::collections::BTreeMap;
 
@@ -21,28 +24,28 @@ const NS_PER_SEC: u64 = 1_000_000_000;
 const BPS_TOTAL: u32 = 10_000;
 const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 
-/// Minimum gas forwarded to the MPC `sign` call. Any unused gas of the
-/// transaction is added on top (GasWeight), so callers should attach 300 Tgas.
-const GAS_SIGN: Gas = Gas::from_tgas(50);
-const GAS_MT_BALANCE: Gas = Gas::from_tgas(10);
-const GAS_MT_TRANSFER: Gas = Gas::from_tgas(50);
-const GAS_CALLBACK: Gas = Gas::from_tgas(40);
-/// on_balance runs itself (~10 Tgas) and then schedules mt_transfer + on_transfer,
-/// so it needs more than the sum of those two.
-const GAS_ON_BALANCE: Gas = Gas::from_tgas(120);
+/// Derivation path of the estate key registered on the owner's Intents account.
+pub const ESTATE_PATH: &str = "estate:intents";
+/// MPC domain for Ed25519 signatures (the key type of NEAR and Intents keys).
+const EDDSA_DOMAIN: u32 = 1;
+/// An Ed25519 payload must fit what the MPC network accepts.
+const MAX_PAYLOAD_BYTES: usize = 1232;
+/// How long a signed sweep intent stays valid.
+const INTENT_VALIDITY_MS: u64 = 60 * 60 * 1000;
+/// Versioned nonce V1 marker used by NEAR Intents.
+const VERSIONED_NONCE_PREFIX: [u8; 4] = [0x56, 0x28, 0xf6, 0xc6];
+const MAX_RESULT_BYTES: usize = 4096;
 
-/// ECDSA payloads are a 32-byte hash (64 hex chars). EdDSA payloads are the
-/// full message bytes; a Solana transaction is at most 1232 bytes.
-const ECDSA_PAYLOAD_HEX_LEN: usize = 64;
-const EDDSA_PAYLOAD_MAX_BYTES: usize = 1232;
-/// Largest callback result we read (a balance is a short JSON string).
-const MAX_RESULT_BYTES: usize = 1024;
+const GAS_SIGN: Gas = Gas::from_tgas(50);
+const GAS_ON_SIGNED: Gas = Gas::from_tgas(150);
+const GAS_EXECUTE_INTENTS: Gas = Gas::from_tgas(80);
+const GAS_ON_SWEPT: Gas = Gas::from_tgas(15);
 
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Heir {
     pub account_id: AccountId,
-    /// Share of each Intents token, in basis points (10,000 = 100%).
+    /// Share of every swept token, in basis points (10,000 = 100%).
     pub share_bps: u32,
 }
 
@@ -55,13 +58,14 @@ pub struct Status {
     pub deadline_ns: U128,
     pub now_ns: U128,
     pub triggered: bool,
+    pub estate_path: String,
+    pub estate_public_key: Option<String>,
 }
 
 #[near(serializers = [json])]
-pub struct ClaimInfo {
-    pub snapshot: Option<U128>,
-    pub paid: U128,
-    pub claimed_by: Vec<AccountId>,
+pub struct Payout {
+    pub account_id: AccountId,
+    pub amount: U128,
 }
 
 #[near(contract_state)]
@@ -73,27 +77,12 @@ pub struct Contract {
     last_ping_ns: u64,
     mpc_contract: AccountId,
     intents_contract: AccountId,
-    /// token_id -> contract balance taken at the first claim after the deadline.
-    snapshots: BTreeMap<String, u128>,
-    /// token_id -> total amount paid out (or in flight) to heirs.
-    paid: BTreeMap<String, u128>,
-    /// token_id -> heirs who claimed (or whose claim is in flight).
-    claimed: BTreeMap<String, Vec<AccountId>>,
-    /// Native NEAR deposited by the owner for the heirs. Tracked separately from
-    /// the contract's balance, so payouts never touch the NEAR the contract
-    /// keeps for its own storage.
-    near_pool: u128,
-    near_snapshot: Option<u128>,
-    near_paid: u128,
-    near_claimed: Vec<AccountId>,
-}
-
-#[near(serializers = [json])]
-pub struct NearInfo {
-    pub pool: U128,
-    pub snapshot: Option<U128>,
-    pub paid: U128,
-    pub claimed_by: Vec<AccountId>,
+    /// The estate key's public half, as registered on the owner's Intents account.
+    estate_public_key: Option<String>,
+    /// token_id -> total amount successfully swept to the heirs.
+    swept: BTreeMap<String, u128>,
+    /// Counter mixed into nonces, so two sweeps never share one.
+    sweep_count: u64,
 }
 
 #[near]
@@ -120,13 +109,9 @@ impl Contract {
             last_ping_ns: env::block_timestamp(),
             mpc_contract,
             intents_contract,
-            snapshots: BTreeMap::new(),
-            paid: BTreeMap::new(),
-            claimed: BTreeMap::new(),
-            near_pool: 0,
-            near_snapshot: None,
-            near_paid: 0,
-            near_claimed: Vec::new(),
+            estate_public_key: None,
+            swept: BTreeMap::new(),
+            sweep_count: 0,
         }
     }
 
@@ -139,222 +124,152 @@ impl Contract {
         self.owner_check_in();
     }
 
-    /// Replace the list of heirs. v1 splits Intents balances equally.
+    /// Heirs with an equal split.
     pub fn set_heirs(&mut self, heirs: Vec<AccountId>) {
         self.owner_check_in();
         self.heirs = equal_shares(heirs);
     }
 
-    /// Change how long the owner can stay silent before the switch triggers.
+    /// The testament: each heir's share in basis points, adding up to 10,000.
+    pub fn set_testament(&mut self, shares: Vec<Heir>) {
+        self.owner_check_in();
+        validate_shares(&shares);
+        self.heirs = shares;
+    }
+
+    /// How long the owner can stay silent before the switch triggers.
     pub fn set_timeout(&mut self, timeout_secs: u64) {
         self.owner_check_in();
         require!(timeout_secs > 0, "timeout_secs must be greater than 0");
         self.timeout_ns = timeout_secs * NS_PER_SEC;
     }
 
-    /// Owner takes Intents funds back while still alive.
-    pub fn owner_withdraw_intents(&mut self, token_id: String, amount: U128) -> Promise {
+    /// Records the estate key the owner registered on their Intents account
+    /// (`add_public_key` on intents.near). It is the MPC-derived key for this
+    /// contract and `estate:intents`; a wrong value only makes sweeps fail.
+    pub fn set_estate_key(&mut self, public_key: String) {
         self.owner_check_in();
-        self.mt_transfer(self.owner.clone(), &token_id, amount.0)
+        require!(
+            public_key.starts_with("ed25519:") && public_key.len() > 40,
+            "public_key must look like ed25519:<base58>"
+        );
+        self.estate_public_key = Some(public_key);
     }
 
     // ------------------------------------------------------------------
-    // Signing gate (controls the ETH / SOL addresses)
+    // The sweep (after the deadline, callable by anyone)
     // ------------------------------------------------------------------
 
-    /// Ask the MPC network to sign `payload` (hex) with the key derived from
-    /// this contract's account and `path`.
-    /// `domain_id`: 0 = ECDSA (Ethereum, Bitcoin), 1 = EdDSA (Solana).
-    /// The transaction result is the MPC signature.
-    pub fn request_signature(&mut self, path: String, payload: String, domain_id: u32) -> Promise {
-        let caller = env::predecessor_account_id();
+    /// Pays `amount` of `token_id` from the owner's Intents account to the
+    /// heirs, split by the testament. `salt` is the current salt of the
+    /// Intents contract (view `current_salt` on intents.near).
+    /// Attach 300 Tgas.
+    pub fn sweep(&mut self, token_id: String, amount: U128, salt: String) -> Promise {
+        require!(self.is_triggered(), "Deadline not reached");
+        let public_key = self
+            .estate_public_key
+            .clone()
+            .unwrap_or_else(|| env::panic_str("The owner has not set the estate key"));
+        require!(amount.0 > 0, "amount must be greater than 0");
+        let salt_bytes = parse_salt(&salt);
 
-        if caller == self.owner {
-            // Owner may sign for any path, but only while alive.
-            self.owner_check_in();
-        } else {
-            require!(self.is_triggered(), "Deadline not reached");
-            require!(
-                self.is_heir(&caller),
-                "Only the owner or an heir can request signatures"
-            );
-            require!(
-                path.starts_with(&heir_path_prefix(&caller)),
-                "Heirs can only sign for their own paths"
-            );
-        }
+        self.sweep_count += 1;
+        let deadline_ms = env::block_timestamp_ms() + INTENT_VALIDITY_MS;
+        let mut seed = env::random_seed();
+        seed.extend_from_slice(&self.sweep_count.to_le_bytes());
+        seed.extend_from_slice(token_id.as_bytes());
+        let random = env::sha256(&seed);
 
-        let payload_key = match domain_id {
-            0 => {
-                require!(
-                    payload.len() == ECDSA_PAYLOAD_HEX_LEN && is_hex(&payload),
-                    "ECDSA payload must be a 32-byte hash as 64 hex characters"
-                );
-                "Ecdsa"
-            }
-            1 => {
-                require!(
-                    !payload.is_empty()
-                        && payload.len() % 2 == 0
-                        && payload.len() <= EDDSA_PAYLOAD_MAX_BYTES * 2
-                        && is_hex(&payload),
-                    "EdDSA payload must be the message bytes as hex"
-                );
-                "Eddsa"
-            }
-            _ => env::panic_str("domain_id must be 0 (ECDSA) or 1 (EdDSA)"),
-        };
+        let payouts = split(&self.heirs, amount.0);
+        let payload = build_payload(
+            &self.owner,
+            &self.intents_contract,
+            &iso_timestamp(deadline_ms),
+            &versioned_nonce(salt_bytes, deadline_ms, &random),
+            &token_id,
+            &payouts,
+        );
+        require!(payload.len() <= MAX_PAYLOAD_BYTES, "Too many heirs for one intent");
 
-        let args = json!({
+        let sign_args = json!({
             "request": {
-                "path": path,
-                "payload_v2": { payload_key: payload.to_lowercase() },
-                "domain_id": domain_id,
+                "path": ESTATE_PATH,
+                "payload_v2": { "Eddsa": hex(payload.as_bytes()) },
+                "domain_id": EDDSA_DOMAIN,
             }
         });
 
-        Promise::new(self.mpc_contract.clone()).function_call_weight(
-            "sign".to_string(),
-            serde_json::to_vec(&args).unwrap(),
-            ONE_YOCTO,
-            GAS_SIGN,
-            GasWeight(1),
-        )
+        Promise::new(self.mpc_contract.clone())
+            .function_call_weight(
+                "sign".to_string(),
+                serde_json::to_vec(&sign_args).unwrap(),
+                ONE_YOCTO,
+                GAS_SIGN,
+                GasWeight(1),
+            )
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(GAS_ON_SIGNED)
+                    .on_signed(payload, public_key, token_id, amount),
+            )
     }
 
-    // ------------------------------------------------------------------
-    // Intents payouts
-    // ------------------------------------------------------------------
+    /// Receives the MPC signature and submits the signed intent to NEAR Intents.
+    #[private]
+    pub fn on_signed(
+        &mut self,
+        payload: String,
+        public_key: String,
+        token_id: String,
+        amount: U128,
+    ) -> PromiseOrValue<bool> {
+        let signature = env::promise_result_checked(0, MAX_RESULT_BYTES)
+            .ok()
+            .and_then(|bytes| parse_signature(&bytes));
+        let Some(signature) = signature else {
+            env::log_str("MPC signing failed; sweep cancelled");
+            return PromiseOrValue::Value(false);
+        };
 
-    /// After the deadline, an heir claims their share of one Intents token.
-    /// The first claim per token snapshots the balance, so every share is
-    /// computed from the same total. The last heir to claim also receives
-    /// any rounding remainder.
-    pub fn claim_intents(&mut self, token_id: String) -> PromiseOrValue<U128> {
-        require!(self.is_triggered(), "Deadline not reached");
-        let heir = env::predecessor_account_id();
-        require!(self.is_heir(&heir), "Only heirs can claim");
+        let args = json!({
+            "signed": [{
+                "standard": "raw_ed25519",
+                "payload": payload,
+                "public_key": public_key,
+                "signature": format!("ed25519:{}", base58(&signature)),
+            }]
+        });
 
-        // Lock this claim first, so it can't run twice in parallel.
-        let list = self.claimed.entry(token_id.clone()).or_default();
-        require!(!list.contains(&heir), "Already claimed this token");
-        list.push(heir.clone());
-
-        if self.snapshots.contains_key(&token_id) {
-            return self.pay_share(token_id, heir);
-        }
-
-        // No snapshot yet: read the contract's balance, then continue in on_balance.
         PromiseOrValue::Promise(
             Promise::new(self.intents_contract.clone())
                 .function_call(
-                    "mt_balance_of".to_string(),
-                    serde_json::to_vec(&json!({
-                        "account_id": env::current_account_id(),
-                        "token_id": token_id,
-                    }))
-                    .unwrap(),
+                    "execute_intents".to_string(),
+                    serde_json::to_vec(&args).unwrap(),
                     NearToken::from_yoctonear(0),
-                    GAS_MT_BALANCE,
+                    GAS_EXECUTE_INTENTS,
                 )
                 .then(
                     Self::ext(env::current_account_id())
-                        .with_static_gas(GAS_ON_BALANCE)
-                        .on_balance(token_id, heir),
+                        .with_static_gas(GAS_ON_SWEPT)
+                        .on_swept(token_id, amount),
                 ),
         )
     }
 
+    /// Records a successful sweep.
     #[private]
-    pub fn on_balance(&mut self, token_id: String, heir: AccountId) -> PromiseOrValue<U128> {
-        let balance: Option<U128> = env::promise_result_checked(0, MAX_RESULT_BYTES)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        match balance {
-            Some(balance) => {
-                // Keep the first snapshot if a parallel claim already stored one.
-                self.snapshots.entry(token_id.clone()).or_insert(balance.0);
-                self.pay_share(token_id, heir)
-            }
-            None => {
-                // Don't panic: undo the lock so the heir can try again.
-                self.unlock_claim(&token_id, &heir);
-                env::log_str("Could not read the Intents balance; claim cancelled");
-                PromiseOrValue::Value(U128(0))
-            }
-        }
-    }
-
-    #[private]
-    pub fn on_transfer(&mut self, token_id: String, heir: AccountId, amount: U128) -> U128 {
+    pub fn on_swept(&mut self, token_id: String, amount: U128) -> bool {
         match env::promise_result_checked(0, MAX_RESULT_BYTES) {
-            Ok(_) => amount,
+            Ok(_) => {
+                *self.swept.entry(token_id.clone()).or_insert(0) += amount.0;
+                env::log_str(&format!("Swept {} of {} to the heirs", amount.0, token_id));
+                true
+            }
             Err(_) => {
-                // Transfer failed: undo the bookkeeping so the heir can retry.
-                if let Some(p) = self.paid.get_mut(&token_id) {
-                    *p = p.saturating_sub(amount.0);
-                }
-                self.unlock_claim(&token_id, &heir);
-                env::log_str("Intents transfer failed; claim cancelled");
-                U128(0)
+                env::log_str("NEAR Intents rejected the sweep; nothing moved");
+                false
             }
         }
-    }
-
-    // ------------------------------------------------------------------
-    // Native NEAR
-    // ------------------------------------------------------------------
-
-    /// Owner deposits NEAR for the heirs (attach it with --deposit).
-    #[payable]
-    pub fn deposit_near(&mut self) -> U128 {
-        self.owner_check_in();
-        let amount = env::attached_deposit().as_yoctonear();
-        require!(amount > 0, "Attach the NEAR to deposit");
-        self.near_pool += amount;
-        U128(self.near_pool)
-    }
-
-    /// Owner takes deposited NEAR back while still alive.
-    pub fn owner_withdraw_near(&mut self, amount: U128) -> Promise {
-        self.owner_check_in();
-        require!(
-            amount.0 > 0 && amount.0 <= self.near_pool,
-            "Amount exceeds the deposited NEAR"
-        );
-        self.near_pool -= amount.0;
-        Promise::new(self.owner.clone()).transfer(NearToken::from_yoctonear(amount.0))
-    }
-
-    /// After the deadline, an heir claims their share of the deposited NEAR.
-    /// It is sent straight to the heir's NEAR account.
-    pub fn claim_near(&mut self) -> U128 {
-        require!(self.is_triggered(), "Deadline not reached");
-        let heir = env::predecessor_account_id();
-        require!(self.is_heir(&heir), "Only heirs can claim");
-        require!(!self.near_claimed.contains(&heir), "Already claimed NEAR");
-        U128(self.pay_near_share(heir))
-    }
-
-    /// After the deadline, anyone can push the NEAR payouts to every heir who
-    /// hasn't claimed yet, so heirs don't have to do anything themselves.
-    pub fn distribute_near(&mut self) -> U128 {
-        require!(self.is_triggered(), "Deadline not reached");
-        let pending: Vec<AccountId> = self
-            .heirs
-            .iter()
-            .map(|h| h.account_id.clone())
-            .filter(|a| !self.near_claimed.contains(a))
-            .collect();
-        require!(
-            !pending.is_empty(),
-            "Every heir has already received their NEAR"
-        );
-        let mut total = 0;
-        for heir in pending {
-            total += self.pay_near_share(heir);
-        }
-        U128(total)
     }
 
     // ------------------------------------------------------------------
@@ -370,29 +285,22 @@ impl Contract {
             deadline_ns: U128(self.deadline_ns() as u128),
             now_ns: U128(env::block_timestamp() as u128),
             triggered: self.is_triggered(),
+            estate_path: ESTATE_PATH.to_string(),
+            estate_public_key: self.estate_public_key.clone(),
         }
     }
 
-    /// The derivation path an heir uses for a given label, e.g. "eth" or "sol".
-    pub fn heir_path(&self, heir: AccountId, label: String) -> String {
-        format!("{}{}", heir_path_prefix(&heir), label)
+    /// What each heir would receive from a sweep of `amount`.
+    pub fn preview_sweep(&self, amount: U128) -> Vec<Payout> {
+        split(&self.heirs, amount.0)
+            .into_iter()
+            .map(|(account_id, amount)| Payout { account_id, amount: U128(amount) })
+            .collect()
     }
 
-    pub fn claim_info(&self, token_id: String) -> ClaimInfo {
-        ClaimInfo {
-            snapshot: self.snapshots.get(&token_id).map(|v| U128(*v)),
-            paid: U128(*self.paid.get(&token_id).unwrap_or(&0)),
-            claimed_by: self.claimed.get(&token_id).cloned().unwrap_or_default(),
-        }
-    }
-
-    pub fn near_info(&self) -> NearInfo {
-        NearInfo {
-            pool: U128(self.near_pool),
-            snapshot: self.near_snapshot.map(U128),
-            paid: U128(self.near_paid),
-            claimed_by: self.near_claimed.clone(),
-        }
+    /// Total amount of `token_id` swept to the heirs so far.
+    pub fn swept(&self, token_id: String) -> U128 {
+        U128(*self.swept.get(&token_id).unwrap_or(&0))
     }
 
     // ------------------------------------------------------------------
@@ -407,132 +315,185 @@ impl Contract {
         env::block_timestamp() >= self.deadline_ns()
     }
 
-    fn is_heir(&self, account: &AccountId) -> bool {
-        self.heirs.iter().any(|h| &h.account_id == account)
-    }
-
     /// Checks the caller is the owner and the switch hasn't triggered, then
     /// resets the timer. Once triggered, the switch is final: this protects
     /// heirs if the owner's key is stolen after death.
     fn owner_check_in(&mut self) {
-        require!(
-            env::predecessor_account_id() == self.owner,
-            "Only the owner can do this"
-        );
-        require!(
-            !self.is_triggered(),
-            "Switch already triggered; owner actions are disabled"
-        );
+        require!(env::predecessor_account_id() == self.owner, "Only the owner can do this");
+        require!(!self.is_triggered(), "Switch already triggered; owner actions are disabled");
         self.last_ping_ns = env::block_timestamp();
     }
-
-    fn pay_share(&mut self, token_id: String, heir: AccountId) -> PromiseOrValue<U128> {
-        let snapshot = *self.snapshots.get(&token_id).expect("snapshot must exist");
-        let already_paid = *self.paid.get(&token_id).unwrap_or(&0);
-        let claims = self.claimed.get(&token_id).map(|l| l.len()).unwrap_or(0);
-
-        let amount = self.share_amount(snapshot, already_paid, claims, &heir);
-
-        if amount == 0 {
-            return PromiseOrValue::Value(U128(0));
-        }
-
-        self.paid.insert(token_id.clone(), already_paid + amount);
-
-        PromiseOrValue::Promise(
-            self.mt_transfer(heir.clone(), &token_id, amount).then(
-                Self::ext(env::current_account_id())
-                    .with_static_gas(GAS_CALLBACK)
-                    .on_transfer(token_id, heir, U128(amount)),
-            ),
-        )
-    }
-
-    /// An heir's share of `snapshot`. `claims` counts this heir's claim too:
-    /// the last heir to claim gets everything left, including rounding dust.
-    fn share_amount(
-        &self,
-        snapshot: u128,
-        already_paid: u128,
-        claims: usize,
-        heir: &AccountId,
-    ) -> u128 {
-        if claims >= self.heirs.len() {
-            return snapshot.saturating_sub(already_paid);
-        }
-        let bps = self
-            .heirs
-            .iter()
-            .find(|h| &h.account_id == heir)
-            .map(|h| h.share_bps)
-            .unwrap_or(0) as u128;
-        snapshot / BPS_TOTAL as u128 * bps
-            + (snapshot % BPS_TOTAL as u128) * bps / BPS_TOTAL as u128
-    }
-
-    /// Pays one heir's NEAR share (snapshotting the pool on the first payout).
-    fn pay_near_share(&mut self, heir: AccountId) -> u128 {
-        let snapshot = *self.near_snapshot.get_or_insert(self.near_pool);
-        self.near_claimed.push(heir.clone());
-        let amount = self.share_amount(snapshot, self.near_paid, self.near_claimed.len(), &heir);
-        if amount > 0 {
-            self.near_paid += amount;
-            self.near_pool -= amount;
-            Promise::new(heir)
-                .transfer(NearToken::from_yoctonear(amount))
-                .detach();
-        }
-        amount
-    }
-
-    fn mt_transfer(&self, receiver_id: AccountId, token_id: &str, amount: u128) -> Promise {
-        Promise::new(self.intents_contract.clone()).function_call(
-            "mt_transfer".to_string(),
-            serde_json::to_vec(&json!({
-                "receiver_id": receiver_id,
-                "token_id": token_id,
-                "amount": U128(amount),
-            }))
-            .unwrap(),
-            ONE_YOCTO,
-            GAS_MT_TRANSFER,
-        )
-    }
-
-    fn unlock_claim(&mut self, token_id: &str, heir: &AccountId) {
-        if let Some(list) = self.claimed.get_mut(token_id) {
-            list.retain(|a| a != heir);
-        }
-    }
 }
 
-fn heir_path_prefix(heir: &AccountId) -> String {
-    format!("heir:{}:", heir)
-}
-
-fn is_hex(s: &str) -> bool {
-    s.chars().all(|c| c.is_ascii_hexdigit())
-}
+// ----------------------------------------------------------------------
+// Pure helpers (unit-tested below)
+// ----------------------------------------------------------------------
 
 /// Equal split in basis points; the last heir gets the rounding remainder.
 fn equal_shares(accounts: Vec<AccountId>) -> Vec<Heir> {
     require!(!accounts.is_empty(), "At least one heir is required");
-    let mut unique = accounts.clone();
-    unique.sort();
-    unique.dedup();
-    require!(unique.len() == accounts.len(), "Duplicate heirs");
-
     let n = accounts.len() as u32;
     let base = BPS_TOTAL / n;
-    let last = BPS_TOTAL - base * (n - 1);
-    accounts
+    let shares: Vec<Heir> = accounts
         .into_iter()
         .enumerate()
         .map(|(i, account_id)| Heir {
             account_id,
-            share_bps: if i as u32 == n - 1 { last } else { base },
+            share_bps: if i as u32 == n - 1 { BPS_TOTAL - base * (n - 1) } else { base },
         })
-        .collect()
+        .collect();
+    validate_shares(&shares);
+    shares
+}
+
+fn validate_shares(shares: &[Heir]) {
+    require!(!shares.is_empty(), "At least one heir is required");
+    let mut accounts: Vec<&AccountId> = shares.iter().map(|h| &h.account_id).collect();
+    accounts.sort();
+    accounts.dedup();
+    require!(accounts.len() == shares.len(), "Duplicate heirs");
+    require!(shares.iter().all(|h| h.share_bps > 0), "Every share must be greater than 0");
+    let total: u32 = shares.iter().map(|h| h.share_bps).sum();
+    require!(total == BPS_TOTAL, "Shares must add up to 10000 (100%)");
+}
+
+/// Each heir's part of `amount`; the last heir gets the rounding remainder.
+/// Heirs whose part rounds to 0 are left out.
+fn split(heirs: &[Heir], amount: u128) -> Vec<(AccountId, u128)> {
+    let total = BPS_TOTAL as u128;
+    let mut paid = 0u128;
+    let mut out = Vec::new();
+    for (i, heir) in heirs.iter().enumerate() {
+        let part = if i == heirs.len() - 1 {
+            amount - paid
+        } else {
+            let bps = heir.share_bps as u128;
+            amount / total * bps + amount % total * bps / total
+        };
+        paid += part;
+        if part > 0 {
+            out.push((heir.account_id.clone(), part));
+        }
+    }
+    out
+}
+
+/// The `raw_ed25519` payload NEAR Intents verifies: one transfer per heir.
+fn build_payload(
+    signer: &AccountId,
+    verifying_contract: &AccountId,
+    deadline: &str,
+    nonce: &str,
+    token_id: &str,
+    payouts: &[(AccountId, u128)],
+) -> String {
+    let intents: Vec<Value> = payouts
+        .iter()
+        .map(|(receiver, amount)| {
+            json!({
+                "intent": "transfer",
+                "receiver_id": receiver,
+                "tokens": { token_id: amount.to_string() },
+            })
+        })
+        .collect();
+    json!({
+        "signer_id": signer,
+        "verifying_contract": verifying_contract,
+        "deadline": deadline,
+        "nonce": nonce,
+        "intents": intents,
+    })
+    .to_string()
+}
+
+/// Versioned nonce V1: prefix (4) || version 0 (1) || salt (4) || deadline ns i64 LE (8) || random (15).
+fn versioned_nonce(salt: [u8; 4], deadline_ms: u64, random: &[u8]) -> String {
+    let mut nonce = Vec::with_capacity(32);
+    nonce.extend_from_slice(&VERSIONED_NONCE_PREFIX);
+    nonce.push(0);
+    nonce.extend_from_slice(&salt);
+    nonce.extend_from_slice(&((deadline_ms as i64) * 1_000_000).to_le_bytes());
+    nonce.extend_from_slice(&random[..15]);
+    match serde_json::to_value(Base64VecU8(nonce)).unwrap() {
+        Value::String(s) => s,
+        _ => env::panic_str("nonce encoding failed"),
+    }
+}
+
+fn parse_salt(salt: &str) -> [u8; 4] {
+    let s = salt.trim_matches('"');
+    require!(s.len() == 8 && s.chars().all(|c| c.is_ascii_hexdigit()), "salt must be 8 hex characters");
+    let mut out = [0u8; 4];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap();
+    }
+    out
+}
+
+/// Reads `{"scheme":"Ed25519","signature":[64 bytes]}` from the MPC network.
+fn parse_signature(bytes: &[u8]) -> Option<Vec<u8>> {
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let sig: Vec<u8> = value
+        .get("signature")?
+        .as_array()?
+        .iter()
+        .map(|b| b.as_u64().and_then(|n| u8::try_from(n).ok()))
+        .collect::<Option<Vec<u8>>>()?;
+    (sig.len() == 64).then_some(sig)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn base58(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let mut digits: Vec<u8> = Vec::new();
+    for &byte in bytes {
+        let mut carry = byte as u32;
+        for d in digits.iter_mut() {
+            carry += (*d as u32) << 8;
+            *d = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
+    let mut out = String::with_capacity(leading_zeros + digits.len());
+    out.extend(std::iter::repeat('1').take(leading_zeros));
+    out.extend(digits.iter().rev().map(|&d| ALPHABET[d as usize] as char));
+    out
+}
+
+/// Milliseconds since 1970 -> "YYYY-MM-DDTHH:MM:SS.mmmZ" (UTC).
+fn iso_timestamp(ms: u64) -> String {
+    let secs = ms / 1000;
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        year,
+        month,
+        day,
+        rem / 3_600,
+        rem % 3_600 / 60,
+        rem % 60,
+        ms % 1000
+    )
 }
 
 // ----------------------------------------------------------------------
@@ -546,7 +507,8 @@ mod tests {
 
     const SEC: u64 = NS_PER_SEC;
     const T0: u64 = 1_000 * SEC;
-    const TIMEOUT: u64 = 120; // 2 minutes, like the demo
+    const TIMEOUT: u64 = 120;
+    const KEY: &str = "ed25519:DDLPgZdqFXsG1g7vtwtAvegPAYs4SzLfmT8fWaRJRSZc";
 
     fn acc(s: &str) -> AccountId {
         s.parse().unwrap()
@@ -554,28 +516,28 @@ mod tests {
 
     fn ctx(caller: &str, now: u64) {
         let mut b = VMContextBuilder::new();
-        b.current_account_id(acc("deadswitch.thalderg.testnet"))
+        b.current_account_id(acc("deadswitch.thalderg.near"))
             .predecessor_account_id(acc(caller))
             .block_timestamp(now);
         testing_env!(b.build());
     }
 
     fn setup() -> Contract {
-        ctx("deadswitch.thalderg.testnet", T0);
+        ctx("deadswitch.thalderg.near", T0);
         Contract::new(
-            acc("thalderg.testnet"),
+            acc("thalderg.near"),
             TIMEOUT,
-            vec![
-                acc("anna.testnet"),
-                acc("marco.testnet"),
-                acc("luca.testnet"),
-            ],
-            acc("v1.signer-prod.testnet"),
+            vec![acc("anna.near"), acc("marco.near"), acc("luca.near")],
+            acc("v1.signer"),
             acc("intents.near"),
         )
     }
 
-    const HASH: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+    fn heir(a: &str, bps: u32) -> Heir {
+        Heir { account_id: acc(a), share_bps: bps }
+    }
+
+    // --- timer and owner rules ---
 
     #[test]
     fn equal_split_adds_up_to_100_percent() {
@@ -585,20 +547,20 @@ mod tests {
     }
 
     #[test]
-    fn not_triggered_before_deadline_and_triggered_after() {
+    fn triggers_only_after_timeout() {
         let c = setup();
-        ctx("anyone.testnet", T0 + (TIMEOUT - 1) * SEC);
+        ctx("anyone.near", T0 + (TIMEOUT - 1) * SEC);
         assert!(!c.status().triggered);
-        ctx("anyone.testnet", T0 + TIMEOUT * SEC);
+        ctx("anyone.near", T0 + TIMEOUT * SEC);
         assert!(c.status().triggered);
     }
 
     #[test]
     fn ping_resets_the_timer() {
         let mut c = setup();
-        ctx("thalderg.testnet", T0 + 100 * SEC);
+        ctx("thalderg.near", T0 + 100 * SEC);
         c.ping();
-        ctx("anyone.testnet", T0 + 150 * SEC); // 50 s after the ping
+        ctx("anyone.near", T0 + 150 * SEC);
         assert!(!c.status().triggered);
     }
 
@@ -606,201 +568,199 @@ mod tests {
     #[should_panic(expected = "Only the owner can do this")]
     fn stranger_cannot_ping() {
         let mut c = setup();
-        ctx("stranger.testnet", T0 + SEC);
+        ctx("stranger.near", T0 + SEC);
         c.ping();
     }
 
     #[test]
     #[should_panic(expected = "owner actions are disabled")]
-    fn owner_cannot_ping_after_trigger() {
+    fn owner_locked_out_after_trigger() {
         let mut c = setup();
-        ctx("thalderg.testnet", T0 + TIMEOUT * SEC);
+        ctx("thalderg.near", T0 + TIMEOUT * SEC);
         c.ping();
     }
 
+    // --- testament ---
+
     #[test]
-    fn owner_can_sign_any_path_before_deadline() {
+    fn testament_sets_custom_shares() {
         let mut c = setup();
-        ctx("thalderg.testnet", T0 + SEC);
-        let _ = c.request_signature("heir:anna.testnet:eth".into(), HASH.into(), 0);
-        assert_eq!(c.last_ping_ns, T0 + SEC); // signing counted as a check-in
+        ctx("thalderg.near", T0 + SEC);
+        c.set_testament(vec![heir("anna.near", 7000), heir("marco.near", 3000)]);
+        let shares: Vec<u32> = c.status().heirs.iter().map(|h| h.share_bps).collect();
+        assert_eq!(shares, vec![7000, 3000]);
     }
 
     #[test]
-    #[should_panic(expected = "Deadline not reached")]
-    fn heir_refused_before_deadline() {
+    #[should_panic(expected = "Shares must add up to 10000")]
+    fn testament_must_add_up_to_100_percent() {
         let mut c = setup();
-        ctx("anna.testnet", T0 + SEC);
-        let _ = c.request_signature("heir:anna.testnet:eth".into(), HASH.into(), 0);
-    }
-
-    #[test]
-    fn heir_allowed_after_deadline_for_own_path() {
-        let mut c = setup();
-        ctx("anna.testnet", T0 + TIMEOUT * SEC);
-        let _ = c.request_signature("heir:anna.testnet:eth".into(), HASH.into(), 0);
-        let _ = c.request_signature("heir:anna.testnet:sol".into(), "abcd".into(), 1);
-    }
-
-    #[test]
-    #[should_panic(expected = "Heirs can only sign for their own paths")]
-    fn heir_refused_for_another_heirs_path() {
-        let mut c = setup();
-        ctx("anna.testnet", T0 + TIMEOUT * SEC);
-        let _ = c.request_signature("heir:marco.testnet:eth".into(), HASH.into(), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Only the owner or an heir")]
-    fn stranger_refused_after_deadline() {
-        let mut c = setup();
-        ctx("stranger.testnet", T0 + TIMEOUT * SEC);
-        let _ = c.request_signature("heir:stranger.testnet:eth".into(), HASH.into(), 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "64 hex characters")]
-    fn bad_ecdsa_payload_refused() {
-        let mut c = setup();
-        ctx("thalderg.testnet", T0 + SEC);
-        let _ = c.request_signature("owner:eth".into(), "1234".into(), 0);
-    }
-
-    #[test]
-    fn heir_path_view() {
-        let c = setup();
-        assert_eq!(
-            c.heir_path(acc("anna.testnet"), "eth".into()),
-            "heir:anna.testnet:eth"
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Deadline not reached")]
-    fn claim_refused_before_deadline() {
-        let mut c = setup();
-        ctx("anna.testnet", T0 + SEC);
-        let _ = c.claim_intents("nep141:wrap.near".into());
-    }
-
-    #[test]
-    #[should_panic(expected = "Already claimed")]
-    fn double_claim_refused() {
-        let mut c = setup();
-        ctx("anna.testnet", T0 + TIMEOUT * SEC);
-        let _ = c.claim_intents("nep141:wrap.near".into());
-        let _ = c.claim_intents("nep141:wrap.near".into());
-    }
-
-    #[test]
-    fn shares_from_snapshot_and_last_heir_gets_remainder() {
-        let mut c = setup();
-        ctx("anna.testnet", T0 + TIMEOUT * SEC);
-        let token = "nep141:wrap.near".to_string();
-        c.snapshots.insert(token.clone(), 1_000_001);
-
-        c.claimed.insert(token.clone(), vec![acc("anna.testnet")]);
-        let _ = c.pay_share(token.clone(), acc("anna.testnet"));
-        assert_eq!(c.paid[&token], 333_300); // 33.33%
-
-        c.claimed
-            .get_mut(&token)
-            .unwrap()
-            .push(acc("marco.testnet"));
-        let _ = c.pay_share(token.clone(), acc("marco.testnet"));
-        assert_eq!(c.paid[&token], 666_600);
-
-        c.claimed.get_mut(&token).unwrap().push(acc("luca.testnet"));
-        let _ = c.pay_share(token.clone(), acc("luca.testnet"));
-        assert_eq!(c.paid[&token], 1_000_001); // last heir takes the rest
-    }
-
-    fn ctx_with_deposit(caller: &str, now: u64, deposit: u128) {
-        let mut b = VMContextBuilder::new();
-        b.current_account_id(acc("deadswitch.thalderg.testnet"))
-            .predecessor_account_id(acc(caller))
-            .block_timestamp(now)
-            .attached_deposit(NearToken::from_yoctonear(deposit));
-        testing_env!(b.build());
-    }
-
-    #[test]
-    fn owner_deposits_and_withdraws_near() {
-        let mut c = setup();
-        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000);
-        assert_eq!(c.deposit_near().0, 1_000);
-        ctx("thalderg.testnet", T0 + 2 * SEC);
-        let _ = c.owner_withdraw_near(U128(400));
-        assert_eq!(c.near_info().pool.0, 600);
-    }
-
-    #[test]
-    #[should_panic(expected = "Only the owner can do this")]
-    fn stranger_cannot_deposit_near() {
-        let mut c = setup();
-        ctx_with_deposit("stranger.testnet", T0 + SEC, 1_000);
-        c.deposit_near();
-    }
-
-    #[test]
-    #[should_panic(expected = "Amount exceeds the deposited NEAR")]
-    fn owner_cannot_withdraw_more_than_deposited() {
-        let mut c = setup();
-        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000);
-        c.deposit_near();
-        ctx("thalderg.testnet", T0 + 2 * SEC);
-        let _ = c.owner_withdraw_near(U128(1_001));
-    }
-
-    #[test]
-    fn heirs_claim_near_and_last_gets_remainder() {
-        let mut c = setup();
-        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000_001);
-        c.deposit_near();
-        ctx("anna.testnet", T0 + SEC + TIMEOUT * SEC);
-        assert_eq!(c.claim_near().0, 333_300);
-        ctx("marco.testnet", T0 + SEC + TIMEOUT * SEC);
-        assert_eq!(c.claim_near().0, 333_300);
-        ctx("luca.testnet", T0 + SEC + TIMEOUT * SEC);
-        assert_eq!(c.claim_near().0, 333_401);
-        assert_eq!(c.near_info().pool.0, 0);
-    }
-
-    #[test]
-    #[should_panic(expected = "Already claimed NEAR")]
-    fn double_near_claim_refused() {
-        let mut c = setup();
-        ctx_with_deposit("thalderg.testnet", T0 + SEC, 1_000);
-        c.deposit_near();
-        ctx("anna.testnet", T0 + SEC + TIMEOUT * SEC);
-        c.claim_near();
-        c.claim_near();
-    }
-
-    #[test]
-    #[should_panic(expected = "Deadline not reached")]
-    fn near_claim_refused_before_deadline() {
-        let mut c = setup();
-        ctx("anna.testnet", T0 + SEC);
-        c.claim_near();
-    }
-
-    #[test]
-    fn anyone_can_distribute_near_to_remaining_heirs() {
-        let mut c = setup();
-        ctx_with_deposit("thalderg.testnet", T0 + SEC, 900);
-        c.deposit_near();
-        ctx("anna.testnet", T0 + SEC + TIMEOUT * SEC);
-        assert_eq!(c.claim_near().0, 299); // 33.33% of 900, rounded down
-        ctx("stranger.testnet", T0 + SEC + TIMEOUT * SEC);
-        assert_eq!(c.distribute_near().0, 601); // marco 299 + luca 302
-        assert_eq!(c.near_info().paid.0, 900);
-        assert_eq!(c.near_info().claimed_by.len(), 3);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_testament(vec![heir("anna.near", 7000), heir("marco.near", 2000)]);
     }
 
     #[test]
     #[should_panic(expected = "Duplicate heirs")]
-    fn duplicate_heirs_refused() {
-        equal_shares(vec![acc("anna.testnet"), acc("anna.testnet")]);
+    fn testament_refuses_duplicates() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_testament(vec![heir("anna.near", 5000), heir("anna.near", 5000)]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the owner can do this")]
+    fn only_owner_sets_testament() {
+        let mut c = setup();
+        ctx("anna.near", T0 + SEC);
+        c.set_testament(vec![heir("anna.near", 10000)]);
+    }
+
+    #[test]
+    fn split_follows_testament_and_last_gets_remainder() {
+        let heirs = vec![heir("anna.near", 7000), heir("marco.near", 3000)];
+        let parts = split(&heirs, 1_000_001);
+        assert_eq!(parts, vec![(acc("anna.near"), 700_000), (acc("marco.near"), 300_001)]);
+        let preview: u128 = split(&heirs, 1_000_001).iter().map(|(_, a)| a).sum();
+        assert_eq!(preview, 1_000_001);
+    }
+
+    #[test]
+    fn split_handles_large_amounts() {
+        let heirs = vec![heir("anna.near", 3333), heir("marco.near", 6667)];
+        let amount: u128 = 100_000_000_000_000_000_000_000_000_000; // 100k tokens at 24 decimals
+        let total: u128 = split(&heirs, amount).iter().map(|(_, a)| a).sum();
+        assert_eq!(total, amount);
+    }
+
+    // --- sweep rules ---
+
+    #[test]
+    #[should_panic(expected = "Deadline not reached")]
+    fn sweep_refused_before_deadline() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_estate_key(KEY.into());
+        ctx("anyone.near", T0 + 2 * SEC);
+        let _ = c.sweep("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "has not set the estate key")]
+    fn sweep_refused_without_estate_key() {
+        let mut c = setup();
+        ctx("anyone.near", T0 + TIMEOUT * SEC);
+        let _ = c.sweep("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    fn anyone_can_sweep_after_deadline() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_estate_key(KEY.into());
+        ctx("stranger.near", T0 + SEC + TIMEOUT * SEC);
+        let _ = c.sweep("nep141:wrap.near".into(), U128(100), "252812b3".into());
+        assert_eq!(c.sweep_count, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "salt must be 8 hex characters")]
+    fn sweep_refuses_bad_salt() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_estate_key(KEY.into());
+        ctx("anyone.near", T0 + SEC + TIMEOUT * SEC);
+        let _ = c.sweep("nep141:wrap.near".into(), U128(100), "xyz".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "public_key must look like")]
+    fn estate_key_must_be_ed25519() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_estate_key("secp256k1:abc".into());
+    }
+
+    // --- the intent the contract signs ---
+
+    #[test]
+    fn payload_pays_each_heir_from_the_owner() {
+        let heirs = vec![heir("anna.near", 7000), heir("marco.near", 3000)];
+        let payload = build_payload(
+            &acc("thalderg.near"),
+            &acc("intents.near"),
+            "2026-11-12T15:30:49.989Z",
+            "NONCE",
+            "nep141:wrap.near",
+            &split(&heirs, 1_000),
+        );
+        let v: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(v["signer_id"], "thalderg.near");
+        assert_eq!(v["verifying_contract"], "intents.near");
+        assert_eq!(v["deadline"], "2026-11-12T15:30:49.989Z");
+        let intents = v["intents"].as_array().unwrap();
+        assert_eq!(intents.len(), 2);
+        assert_eq!(intents[0]["intent"], "transfer");
+        assert_eq!(intents[0]["receiver_id"], "anna.near");
+        assert_eq!(intents[0]["tokens"]["nep141:wrap.near"], "700");
+        assert_eq!(intents[1]["receiver_id"], "marco.near");
+        assert_eq!(intents[1]["tokens"]["nep141:wrap.near"], "300");
+    }
+
+    #[test]
+    fn nonce_is_versioned_v1() {
+        let random = [7u8; 32];
+        let b64 = versioned_nonce([0x25, 0x28, 0x12, 0xb3], 1_794_497_449_989, &random);
+        let Value::String(s) = serde_json::to_value(&b64).unwrap() else { panic!() };
+        let bytes: Base64VecU8 = serde_json::from_value(Value::String(s)).unwrap();
+        let n = bytes.0;
+        assert_eq!(n.len(), 32);
+        assert_eq!(&n[..4], &VERSIONED_NONCE_PREFIX);
+        assert_eq!(n[4], 0);
+        assert_eq!(&n[5..9], &[0x25, 0x28, 0x12, 0xb3]);
+        let deadline_ns = i64::from_le_bytes(n[9..17].try_into().unwrap());
+        assert_eq!(deadline_ns, 1_794_497_449_989 * 1_000_000);
+        assert_eq!(&n[17..], &[7u8; 15]);
+        // Same prefix as the real intent accepted on mainnet ("Vij2xgAlKBKz...").
+        assert!(b64.starts_with("Vij2xgAlKBKz"));
+    }
+
+    #[test]
+    fn iso_timestamps() {
+        assert_eq!(iso_timestamp(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso_timestamp(1_709_208_000_000), "2024-02-29T12:00:00.000Z");
+        assert_eq!(iso_timestamp(1_794_497_449_989), "2026-11-12T15:30:49.989Z");
+    }
+
+    #[test]
+    fn base58_matches_known_values() {
+        assert_eq!(base58(b"Hello World!"), "2NEpo7TZRRrLZSi2U");
+        assert_eq!(base58(&[0, 0, 1, 2]), "115T");
+        // The real signature from the mainnet key test.
+        let sig: [u8; 64] = [
+            103, 104, 218, 121, 167, 128, 35, 149, 245, 111, 145, 180, 157, 132, 192, 27, 6, 221,
+            170, 152, 243, 28, 71, 20, 198, 224, 214, 134, 254, 213, 73, 114, 124, 140, 181, 127,
+            175, 163, 52, 210, 170, 93, 237, 242, 177, 66, 119, 8, 205, 219, 212, 78, 241, 241,
+            50, 227, 40, 217, 185, 208, 72, 41, 186, 10,
+        ];
+        assert_eq!(
+            base58(&sig),
+            "34v2sfhUpA38RbiPDXur5xqmmLE964LmGkryY3f92PbBzonVshiT8YnjjXFpkzUUG3bruSwiiwk1Cg9yEa9LizMf"
+        );
+    }
+
+    #[test]
+    fn parses_mpc_signature() {
+        let mut nums = vec!["1"; 64].join(",");
+        let ok = format!(r#"{{"scheme":"Ed25519","signature":[{}]}}"#, nums);
+        assert_eq!(parse_signature(ok.as_bytes()), Some(vec![1u8; 64]));
+        nums = vec!["1"; 63].join(",");
+        let short = format!(r#"{{"scheme":"Ed25519","signature":[{}]}}"#, nums);
+        assert_eq!(parse_signature(short.as_bytes()), None);
+        assert_eq!(parse_signature(b"not json"), None);
+    }
+
+    #[test]
+    fn hex_encoding() {
+        assert_eq!(hex(b"{\"a\"}"), "7b2261227d");
     }
 }
