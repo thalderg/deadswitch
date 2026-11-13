@@ -1,4 +1,4 @@
-//! Deadswitch v3: crypto inheritance and a panic button on NEAR Intents.
+//! Deadswitch v4: crypto inheritance and a panic button on NEAR Intents.
 //!
 //! The owner keeps their funds in their own NEAR Intents account and registers
 //! one extra key on it: a key derived by NEAR Chain Signatures from this
@@ -15,6 +15,9 @@
 //!   immediately with `send_now`, e.g. if they suspect their keys are compromised.
 //! - Changes to the testament only take effect after a delay fixed at deploy,
 //!   so nobody holding the owner's key can quickly redirect the funds.
+//! - The owner can switch the timer and the panic button on or off later.
+//!   Turning a feature off applies at once; turning one on waits for the
+//!   same change delay.
 
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde_json::{self, json, Value};
@@ -68,6 +71,16 @@ pub struct Status {
     pub panic_enabled: bool,
     pub change_delay_secs: u64,
     pub pending_testament: Option<PendingTestament>,
+    pub pending_modes: Option<PendingModes>,
+}
+
+/// A mode change that turns a feature on, waiting for the change delay.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingModes {
+    pub timer_enabled: bool,
+    pub panic_enabled: bool,
+    pub effective_ns: U128,
 }
 
 /// A testament change waiting for the change delay to pass.
@@ -106,6 +119,9 @@ pub struct Contract {
     /// How long a testament change waits before it takes effect. Fixed at deploy.
     change_delay_ns: u64,
     pending: Option<PendingTestament>,
+    /// When the timer last became active; the deadline never starts before it.
+    timer_active_since_ns: u64,
+    pending_modes: Option<PendingModes>,
 }
 
 #[near]
@@ -143,6 +159,8 @@ impl Contract {
             panic_enabled,
             change_delay_ns: change_delay_secs * NS_PER_SEC,
             pending: None,
+            timer_active_since_ns: env::block_timestamp(),
+            pending_modes: None,
         }
     }
 
@@ -176,6 +194,41 @@ impl Contract {
         self.pending = None;
     }
 
+    /// Switches the timer and the panic button on or off. At least one must
+    /// stay on. A change that only turns features off applies immediately
+    /// (and replaces any pending mode change); a change that turns anything
+    /// on waits for the change delay.
+    pub fn set_modes(&mut self, timer_enabled: bool, panic_enabled: bool) {
+        self.owner_check_in();
+        self.apply_pending_modes();
+        require!(timer_enabled || panic_enabled, "Keep the timer, the panic button, or both");
+        let turns_something_on =
+            (timer_enabled && !self.timer_enabled) || (panic_enabled && !self.panic_enabled);
+        if !turns_something_on || self.change_delay_ns == 0 {
+            if timer_enabled && !self.timer_enabled {
+                self.timer_active_since_ns = env::block_timestamp();
+            }
+            self.timer_enabled = timer_enabled;
+            self.panic_enabled = panic_enabled;
+            self.pending_modes = None;
+        } else {
+            let effective = env::block_timestamp().saturating_add(self.change_delay_ns);
+            self.pending_modes = Some(PendingModes {
+                timer_enabled,
+                panic_enabled,
+                effective_ns: U128(effective as u128),
+            });
+        }
+    }
+
+    /// Cancels a mode change that hasn't taken effect yet.
+    pub fn cancel_pending_modes(&mut self) {
+        self.owner_check_in();
+        self.apply_pending_modes();
+        require!(self.pending_modes.is_some(), "No pending mode change");
+        self.pending_modes = None;
+    }
+
     /// How long the owner can stay silent before the switch triggers.
     pub fn set_timeout(&mut self, timeout_secs: u64) {
         self.owner_check_in();
@@ -204,6 +257,7 @@ impl Contract {
     /// Intents contract (view `current_salt` on intents.near).
     /// Attach 300 Tgas.
     pub fn sweep(&mut self, token_id: String, amount: U128, salt: String) -> Promise {
+        self.apply_pending_modes();
         require!(self.timer_enabled, "This switch has no timer; only the owner's panic button can send");
         require!(self.is_triggered(), "Deadline not reached");
         self.start_payout(token_id, amount, salt)
@@ -213,6 +267,7 @@ impl Contract {
     /// the sweep (MPC-signed intent paying each heir), only callable by the
     /// owner while the switch hasn't triggered. Attach 300 Tgas.
     pub fn send_now(&mut self, token_id: String, amount: U128, salt: String) -> Promise {
+        self.apply_pending_modes();
         require!(self.panic_enabled, "The panic button is off for this switch");
         self.owner_check_in();
         self.start_payout(token_id, amount, salt)
@@ -362,10 +417,14 @@ impl Contract {
             triggered: self.is_triggered(),
             estate_path: ESTATE_PATH.to_string(),
             estate_public_key: self.estate_public_key.clone(),
-            timer_enabled: self.timer_enabled,
-            panic_enabled: self.panic_enabled,
+            timer_enabled: self.effective_modes().0,
+            panic_enabled: self.effective_modes().1,
             change_delay_secs: self.change_delay_ns / NS_PER_SEC,
             pending_testament: self.pending.clone().filter(|p| !self.is_effective(p)),
+            pending_modes: self
+                .pending_modes
+                .clone()
+                .filter(|m| (env::block_timestamp() as u128) < m.effective_ns.0),
         }
     }
 
@@ -389,12 +448,46 @@ impl Contract {
     // Internal helpers
     // ------------------------------------------------------------------
 
+    /// (timer on, panic button on, timer active since), counting a pending
+    /// mode change once its delay has passed.
+    fn effective_modes(&self) -> (bool, bool, u64) {
+        match &self.pending_modes {
+            Some(m) if (env::block_timestamp() as u128) >= m.effective_ns.0 => {
+                let since = if m.timer_enabled && !self.timer_enabled {
+                    m.effective_ns.0 as u64
+                } else {
+                    self.timer_active_since_ns
+                };
+                (m.timer_enabled, m.panic_enabled, since)
+            }
+            _ => (self.timer_enabled, self.panic_enabled, self.timer_active_since_ns),
+        }
+    }
+
+    /// Makes a pending mode change permanent once its delay has passed.
+    fn apply_pending_modes(&mut self) {
+        let due = self
+            .pending_modes
+            .as_ref()
+            .is_some_and(|m| (env::block_timestamp() as u128) >= m.effective_ns.0);
+        if due {
+            let (timer, panic, since) = self.effective_modes();
+            self.timer_enabled = timer;
+            self.panic_enabled = panic;
+            self.timer_active_since_ns = since;
+            self.pending_modes = None;
+        }
+    }
+
+    /// The deadline starts from the last check-in, or from when the timer
+    /// became active, whichever is later.
     fn deadline_ns(&self) -> u64 {
-        self.last_ping_ns.saturating_add(self.timeout_ns)
+        let since = self.effective_modes().2;
+        self.last_ping_ns.max(since).saturating_add(self.timeout_ns)
     }
 
     fn is_triggered(&self) -> bool {
-        self.timer_enabled && env::block_timestamp() >= self.deadline_ns()
+        self.effective_modes().0 && env::block_timestamp() >= self.deadline_ns()
     }
 
     fn is_effective(&self, pending: &PendingTestament) -> bool {
@@ -1004,6 +1097,109 @@ mod tests {
         ctx("anyone.near", T0 + 100 * SEC);
         assert_eq!(c.status().heirs.len(), 3);
         assert!(c.status().pending_testament.is_none());
+    }
+
+    // --- changing modes later ---
+
+    #[test]
+    fn turning_the_panic_button_off_applies_at_once() {
+        let mut c = setup_with(true, true, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_modes(true, false);
+        assert!(!c.status().panic_enabled);
+        assert!(c.status().pending_modes.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "The panic button is off")]
+    fn panic_button_refused_right_after_turning_it_off() {
+        let mut c = setup_with(true, true, 60);
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 2 * SEC);
+        c.set_modes(true, false);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    fn turning_the_timer_off_applies_at_once_and_disarms_the_switch() {
+        let mut c = setup_with(true, true, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_modes(false, true);
+        ctx("anyone.near", T0 + 10 * TIMEOUT * SEC);
+        assert!(!c.status().timer_enabled);
+        assert!(!c.status().triggered);
+    }
+
+    #[test]
+    #[should_panic(expected = "Keep the timer, the panic button, or both")]
+    fn cannot_turn_everything_off() {
+        let mut c = setup_with(true, true, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_modes(false, false);
+    }
+
+    #[test]
+    fn turning_the_panic_button_on_waits_for_the_delay() {
+        let mut c = setup_with(true, false, 60);
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 2 * SEC);
+        c.set_modes(true, true);
+        assert!(!c.status().panic_enabled);
+        assert!(c.status().pending_modes.is_some());
+
+        ctx("thalderg.near", T0 + 63 * SEC);
+        assert!(c.status().panic_enabled);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+        assert!(c.pending_modes.is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "The panic button is off")]
+    fn panic_button_refused_during_the_delay() {
+        let mut c = setup_with(true, false, 60);
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 2 * SEC);
+        c.set_modes(true, true);
+        ctx("thalderg.near", T0 + 30 * SEC);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    fn turning_the_timer_on_starts_a_fresh_countdown() {
+        // Panic-only switch; the owner hasn't checked in for a long time.
+        let mut c = setup_with(false, true, 60);
+        ctx("thalderg.near", T0 + 1_000 * SEC);
+        c.set_modes(true, true); // effective at +1060 s, then a full timeout (120 s)
+        ctx("anyone.near", T0 + 1_100 * SEC);
+        assert!(!c.status().triggered);
+        ctx("anyone.near", T0 + 1_179 * SEC);
+        assert!(!c.status().triggered);
+        ctx("anyone.near", T0 + 1_180 * SEC);
+        assert!(c.status().triggered);
+    }
+
+    #[test]
+    fn a_change_that_adds_and_removes_waits_as_a_whole() {
+        let mut c = setup_with(true, false, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_modes(false, true); // timer off + panic on
+        assert!(c.status().timer_enabled);
+        assert!(!c.status().panic_enabled);
+        ctx("anyone.near", T0 + 62 * SEC);
+        assert!(!c.status().timer_enabled);
+        assert!(c.status().panic_enabled);
+    }
+
+    #[test]
+    fn owner_can_cancel_a_pending_mode_change() {
+        let mut c = setup_with(true, false, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_modes(true, true);
+        ctx("thalderg.near", T0 + 10 * SEC);
+        c.cancel_pending_modes();
+        ctx("anyone.near", T0 + 100 * SEC);
+        assert!(!c.status().panic_enabled);
+        assert!(c.status().pending_modes.is_none());
     }
 
     #[test]
