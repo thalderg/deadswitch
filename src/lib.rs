@@ -1,4 +1,4 @@
-//! Deadswitch v2: crypto inheritance on NEAR Intents.
+//! Deadswitch v3: crypto inheritance and a panic button on NEAR Intents.
 //!
 //! The owner keeps their funds in their own NEAR Intents account and registers
 //! one extra key on it: a key derived by NEAR Chain Signatures from this
@@ -11,6 +11,10 @@
 //!   the contract writes one transfer intent that pays each heir their share
 //!   straight from the owner's Intents account, has the MPC network sign it,
 //!   and submits it to NEAR Intents. Funds never pass through this contract.
+//! - Panic button (optional): the owner can execute the same testament
+//!   immediately with `send_now`, e.g. if they suspect their keys are compromised.
+//! - Changes to the testament only take effect after a delay fixed at deploy,
+//!   so nobody holding the owner's key can quickly redirect the funds.
 
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde_json::{self, json, Value};
@@ -60,6 +64,18 @@ pub struct Status {
     pub triggered: bool,
     pub estate_path: String,
     pub estate_public_key: Option<String>,
+    pub timer_enabled: bool,
+    pub panic_enabled: bool,
+    pub change_delay_secs: u64,
+    pub pending_testament: Option<PendingTestament>,
+}
+
+/// A testament change waiting for the change delay to pass.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingTestament {
+    pub heirs: Vec<Heir>,
+    pub effective_ns: U128,
 }
 
 #[near(serializers = [json])]
@@ -83,6 +99,13 @@ pub struct Contract {
     swept: BTreeMap<String, u128>,
     /// Counter mixed into nonces, so two sweeps never share one.
     sweep_count: u64,
+    /// Deadswitch: heirs can sweep once the owner stops checking in.
+    timer_enabled: bool,
+    /// Panic button: the owner can execute the testament at any time.
+    panic_enabled: bool,
+    /// How long a testament change waits before it takes effect. Fixed at deploy.
+    change_delay_ns: u64,
+    pending: Option<PendingTestament>,
 }
 
 #[near]
@@ -100,8 +123,12 @@ impl Contract {
         heirs: Vec<AccountId>,
         mpc_contract: AccountId,
         intents_contract: AccountId,
+        timer_enabled: bool,
+        panic_enabled: bool,
+        change_delay_secs: u64,
     ) -> Self {
-        require!(timeout_secs > 0, "timeout_secs must be greater than 0");
+        require!(timer_enabled || panic_enabled, "Enable the timer, the panic button, or both");
+        require!(!timer_enabled || timeout_secs > 0, "timeout_secs must be greater than 0");
         Self {
             owner,
             heirs: equal_shares(heirs),
@@ -112,6 +139,10 @@ impl Contract {
             estate_public_key: None,
             swept: BTreeMap::new(),
             sweep_count: 0,
+            timer_enabled,
+            panic_enabled,
+            change_delay_ns: change_delay_secs * NS_PER_SEC,
+            pending: None,
         }
     }
 
@@ -124,17 +155,25 @@ impl Contract {
         self.owner_check_in();
     }
 
-    /// Heirs with an equal split.
+    /// Heirs with an equal split. Takes effect after the change delay.
     pub fn set_heirs(&mut self, heirs: Vec<AccountId>) {
         self.owner_check_in();
-        self.heirs = equal_shares(heirs);
+        self.schedule_testament(equal_shares(heirs));
     }
 
     /// The testament: each heir's share in basis points, adding up to 10,000.
+    /// Takes effect after the change delay.
     pub fn set_testament(&mut self, shares: Vec<Heir>) {
         self.owner_check_in();
         validate_shares(&shares);
-        self.heirs = shares;
+        self.schedule_testament(shares);
+    }
+
+    /// Cancels a testament change that hasn't taken effect yet.
+    pub fn cancel_pending_testament(&mut self) {
+        self.owner_check_in();
+        require!(self.pending.is_some(), "No pending testament change");
+        self.pending = None;
     }
 
     /// How long the owner can stay silent before the switch triggers.
@@ -165,7 +204,42 @@ impl Contract {
     /// Intents contract (view `current_salt` on intents.near).
     /// Attach 300 Tgas.
     pub fn sweep(&mut self, token_id: String, amount: U128, salt: String) -> Promise {
+        require!(self.timer_enabled, "This switch has no timer; only the owner's panic button can send");
         require!(self.is_triggered(), "Deadline not reached");
+        self.start_payout(token_id, amount, salt)
+    }
+
+    /// Panic button: the owner executes the testament right now. Same path as
+    /// the sweep (MPC-signed intent paying each heir), only callable by the
+    /// owner while the switch hasn't triggered. Attach 300 Tgas.
+    pub fn send_now(&mut self, token_id: String, amount: U128, salt: String) -> Promise {
+        require!(self.panic_enabled, "The panic button is off for this switch");
+        self.owner_check_in();
+        self.start_payout(token_id, amount, salt)
+    }
+
+    /// Receives the MPC signature and submits the signed intent to NEAR Intents.
+    #[private]
+    pub fn on_signed(
+        &mut self,
+        payload: String,
+        public_key: String,
+        token_id: String,
+        amount: U128,
+    ) -> PromiseOrValue<bool> {
+        self.submit_signed(payload, public_key, token_id, amount)
+    }
+
+    /// Records a successful payout.
+    #[private]
+    pub fn on_swept(&mut self, token_id: String, amount: U128) -> bool {
+        self.record_payout(token_id, amount)
+    }
+}
+
+impl Contract {
+    fn start_payout(&mut self, token_id: String, amount: U128, salt: String) -> Promise {
+        self.apply_pending();
         let public_key = self
             .estate_public_key
             .clone()
@@ -181,6 +255,7 @@ impl Contract {
         let random = env::sha256(&seed);
 
         let payouts = split(&self.heirs, amount.0);
+        require!(!payouts.is_empty(), "amount is too small to split");
         let payload = build_payload(
             &self.owner,
             &self.intents_contract,
@@ -214,9 +289,7 @@ impl Contract {
             )
     }
 
-    /// Receives the MPC signature and submits the signed intent to NEAR Intents.
-    #[private]
-    pub fn on_signed(
+    fn submit_signed(
         &mut self,
         payload: String,
         public_key: String,
@@ -227,7 +300,7 @@ impl Contract {
             .ok()
             .and_then(|bytes| parse_signature(&bytes));
         let Some(signature) = signature else {
-            env::log_str("MPC signing failed; sweep cancelled");
+            env::log_str("MPC signing failed; payout cancelled");
             return PromiseOrValue::Value(false);
         };
 
@@ -256,22 +329,24 @@ impl Contract {
         )
     }
 
-    /// Records a successful sweep.
-    #[private]
-    pub fn on_swept(&mut self, token_id: String, amount: U128) -> bool {
+    fn record_payout(&mut self, token_id: String, amount: U128) -> bool {
         match env::promise_result_checked(0, MAX_RESULT_BYTES) {
             Ok(_) => {
                 *self.swept.entry(token_id.clone()).or_insert(0) += amount.0;
-                env::log_str(&format!("Swept {} of {} to the heirs", amount.0, token_id));
+                env::log_str(&format!("Sent {} of {} to the heirs", amount.0, token_id));
                 true
             }
             Err(_) => {
-                env::log_str("NEAR Intents rejected the sweep; nothing moved");
+                env::log_str("NEAR Intents rejected the payout; nothing moved");
                 false
             }
         }
     }
 
+}
+
+#[near]
+impl Contract {
     // ------------------------------------------------------------------
     // Views (free, read-only)
     // ------------------------------------------------------------------
@@ -279,7 +354,7 @@ impl Contract {
     pub fn status(&self) -> Status {
         Status {
             owner: self.owner.clone(),
-            heirs: self.heirs.clone(),
+            heirs: self.effective_heirs().to_vec(),
             timeout_secs: self.timeout_ns / NS_PER_SEC,
             last_ping_ns: U128(self.last_ping_ns as u128),
             deadline_ns: U128(self.deadline_ns() as u128),
@@ -287,12 +362,16 @@ impl Contract {
             triggered: self.is_triggered(),
             estate_path: ESTATE_PATH.to_string(),
             estate_public_key: self.estate_public_key.clone(),
+            timer_enabled: self.timer_enabled,
+            panic_enabled: self.panic_enabled,
+            change_delay_secs: self.change_delay_ns / NS_PER_SEC,
+            pending_testament: self.pending.clone().filter(|p| !self.is_effective(p)),
         }
     }
 
     /// What each heir would receive from a sweep of `amount`.
     pub fn preview_sweep(&self, amount: U128) -> Vec<Payout> {
-        split(&self.heirs, amount.0)
+        split(self.effective_heirs(), amount.0)
             .into_iter()
             .map(|(account_id, amount)| Payout { account_id, amount: U128(amount) })
             .collect()
@@ -303,6 +382,9 @@ impl Contract {
         U128(*self.swept.get(&token_id).unwrap_or(&0))
     }
 
+}
+
+impl Contract {
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
@@ -312,7 +394,40 @@ impl Contract {
     }
 
     fn is_triggered(&self) -> bool {
-        env::block_timestamp() >= self.deadline_ns()
+        self.timer_enabled && env::block_timestamp() >= self.deadline_ns()
+    }
+
+    fn is_effective(&self, pending: &PendingTestament) -> bool {
+        env::block_timestamp() as u128 >= pending.effective_ns.0
+    }
+
+    /// The testament in force right now (a pending change counts once its delay has passed).
+    fn effective_heirs(&self) -> &[Heir] {
+        match &self.pending {
+            Some(p) if self.is_effective(p) => &p.heirs,
+            _ => &self.heirs,
+        }
+    }
+
+    /// Makes a pending change permanent once its delay has passed.
+    fn apply_pending(&mut self) {
+        if let Some(p) = self.pending.clone() {
+            if self.is_effective(&p) {
+                self.heirs = p.heirs;
+                self.pending = None;
+            }
+        }
+    }
+
+    fn schedule_testament(&mut self, heirs: Vec<Heir>) {
+        self.apply_pending();
+        if self.change_delay_ns == 0 {
+            self.heirs = heirs;
+            self.pending = None;
+        } else {
+            let effective = env::block_timestamp().saturating_add(self.change_delay_ns);
+            self.pending = Some(PendingTestament { heirs, effective_ns: U128(effective as u128) });
+        }
     }
 
     /// Checks the caller is the owner and the switch hasn't triggered, then
@@ -522,7 +637,12 @@ mod tests {
         testing_env!(b.build());
     }
 
+    /// Timer + panic button, no change delay.
     fn setup() -> Contract {
+        setup_with(true, true, 0)
+    }
+
+    fn setup_with(timer: bool, panic: bool, delay_secs: u64) -> Contract {
         ctx("deadswitch.thalderg.near", T0);
         Contract::new(
             acc("thalderg.near"),
@@ -530,7 +650,15 @@ mod tests {
             vec![acc("anna.near"), acc("marco.near"), acc("luca.near")],
             acc("v1.signer"),
             acc("intents.near"),
+            timer,
+            panic,
+            delay_secs,
         )
+    }
+
+    fn with_key(c: &mut Contract, now: u64) {
+        ctx("thalderg.near", now);
+        c.set_estate_key(KEY.into());
     }
 
     fn heir(a: &str, bps: u32) -> Heir {
@@ -757,6 +885,125 @@ mod tests {
         let short = format!(r#"{{"scheme":"Ed25519","signature":[{}]}}"#, nums);
         assert_eq!(parse_signature(short.as_bytes()), None);
         assert_eq!(parse_signature(b"not json"), None);
+    }
+
+    // --- modes: timer, panic button, both ---
+
+    #[test]
+    #[should_panic(expected = "Enable the timer, the panic button, or both")]
+    fn at_least_one_mode_required() {
+        setup_with(false, false, 0);
+    }
+
+    #[test]
+    fn owner_can_press_panic_button_before_deadline() {
+        let mut c = setup();
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 2 * SEC);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+        assert_eq!(c.sweep_count, 1);
+        assert_eq!(c.last_ping_ns, T0 + 2 * SEC); // pressing it is also a check-in
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the owner can do this")]
+    fn only_owner_can_press_panic_button() {
+        let mut c = setup();
+        with_key(&mut c, T0 + SEC);
+        ctx("anna.near", T0 + 2 * SEC);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "The panic button is off")]
+    fn panic_button_off_in_timer_only_mode() {
+        let mut c = setup_with(true, false, 0);
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 2 * SEC);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "This switch has no timer")]
+    fn no_sweep_in_panic_only_mode() {
+        let mut c = setup_with(false, true, 0);
+        with_key(&mut c, T0 + SEC);
+        ctx("anna.near", T0 + 10 * TIMEOUT * SEC);
+        let _ = c.sweep("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    fn panic_only_mode_never_triggers() {
+        let mut c = setup_with(false, true, 0);
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 10 * TIMEOUT * SEC);
+        assert!(!c.status().triggered);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    #[test]
+    #[should_panic(expected = "owner actions are disabled")]
+    fn panic_button_unavailable_after_trigger() {
+        let mut c = setup();
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + SEC + TIMEOUT * SEC);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+    }
+
+    // --- change delay ---
+
+    #[test]
+    fn testament_change_waits_for_the_delay() {
+        let mut c = setup_with(true, true, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_testament(vec![heir("anna.near", 7000), heir("marco.near", 3000)]);
+
+        ctx("anyone.near", T0 + 30 * SEC); // 29 s later: old testament still in force
+        assert_eq!(c.status().heirs.len(), 3);
+        assert!(c.status().pending_testament.is_some());
+        assert_eq!(c.preview_sweep(U128(900))[0].amount.0, 299);
+
+        ctx("anyone.near", T0 + 61 * SEC); // delay passed: new testament in force
+        let shares: Vec<u32> = c.status().heirs.iter().map(|h| h.share_bps).collect();
+        assert_eq!(shares, vec![7000, 3000]);
+        assert!(c.status().pending_testament.is_none());
+        assert_eq!(c.preview_sweep(U128(1000))[0].amount.0, 700);
+    }
+
+    #[test]
+    fn payout_uses_the_new_testament_once_effective() {
+        let mut c = setup_with(true, true, 60);
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 2 * SEC);
+        c.set_testament(vec![heir("anna.near", 10000)]);
+        ctx("thalderg.near", T0 + 70 * SEC);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+        assert_eq!(c.heirs, vec![heir("anna.near", 10000)]);
+        assert!(c.pending.is_none());
+    }
+
+    #[test]
+    fn payout_before_the_delay_uses_the_old_testament() {
+        let mut c = setup_with(true, true, 60);
+        with_key(&mut c, T0 + SEC);
+        ctx("thalderg.near", T0 + 2 * SEC);
+        c.set_testament(vec![heir("anna.near", 10000)]);
+        ctx("thalderg.near", T0 + 10 * SEC);
+        let _ = c.send_now("nep141:wrap.near".into(), U128(100), "252812b3".into());
+        assert_eq!(c.heirs.len(), 3); // the change is still waiting
+        assert!(c.pending.is_some());
+    }
+
+    #[test]
+    fn owner_can_cancel_a_pending_change() {
+        let mut c = setup_with(true, true, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_testament(vec![heir("anna.near", 10000)]);
+        ctx("thalderg.near", T0 + 10 * SEC);
+        c.cancel_pending_testament();
+        ctx("anyone.near", T0 + 100 * SEC);
+        assert_eq!(c.status().heirs.len(), 3);
+        assert!(c.status().pending_testament.is_none());
     }
 
     #[test]
