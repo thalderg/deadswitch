@@ -85,6 +85,46 @@ Each reminder shows how much time is left, the exact date and time the plan runs
 
 ---
 
+## See it working
+
+All screenshots are from the live prototype on NEAR mainnet (`deadswitch.thalderg.near`, owner `thalderg.near`).
+
+**The landing page.** Each coin you hold is a loose wire; they all run into your switch, a seed in a pot shaped like the power symbol. A bonsai grows from it: one branch splits into the shares of the people you chose, one leads to a backup wallet, and a low one sends everything to safety if your keys are at risk.
+
+![Landing page with the bonsai hero](docs/screenshots/landing.jpg)
+
+**Your plan.** A live countdown and a bar showing how much of the check-in period has passed, a health check ("Everything is in place"), your NEAR Intents balance, who receives what (with what each person would get today), reminders, settings, the panic button and the switch's permission.
+
+![The owner's dashboard](docs/screenshots/dashboard.jpg)
+
+**Reminders that check you in with one tap.** By Telegram and by email. The tap needs no wallet and no signature: the reminder service calls `operator_check_in` and pays the gas. Here the Telegram tap reset the timer on mainnet ("You're checked in. Your plan now runs on 15 November 2026 at 15:35 UTC").
+
+| Telegram | Email |
+| --- | --- |
+| ![Telegram reminder with the I'm still here button](docs/screenshots/reminder-telegram.png) | ![Email reminder](docs/screenshots/reminder-email.png) |
+
+**Checking in on the website is free too.** The wallet signs a message (no transaction); the service verifies it and checks you in.
+
+<img src="docs/screenshots/wallet-sign-message.png" alt="Meteor asking to sign the Deadswitch message" width="360">
+
+**Changes that add power wait; you can cancel them.** A new split (60/40) first appears as pending with a "Cancel change" button; cancelled, the plan stays as it was; saved again and left alone, it applies after the change delay (1 minute in this test deployment, 48 hours in real use).
+
+| Pending | Cancelled | Applied |
+| --- | --- | --- |
+| ![A pending change](docs/screenshots/plan-change-pending.png) | ![The change cancelled](docs/screenshots/plan-change-cancelled.png) | ![The change applied](docs/screenshots/plan-change-applied.png) |
+
+**Turning something off is immediate; turning it on waits.**
+
+| Panic button off: applied at once | Turned back on: waits for the delay |
+| --- | --- |
+| ![Turning the panic button off](docs/screenshots/settings-turned-off.png) | ![Turning it on waits](docs/screenshots/settings-turn-on-waits.png) |
+
+**What the people in the plan see.** Before the plan runs, what each would receive with today's balances; after, a **Carry out the plan** button and how to withdraw.
+
+![The heir view](docs/screenshots/heir-view.png)
+
+---
+
 ## Pricing and business model
 
 **Free during the beta.** Nothing is charged in this prototype.
@@ -188,6 +228,8 @@ A second check-in right after was refused:
 ```
 Smart contract panicked: Too soon: the operator can check in at most once per interval
 ```
+
+**8. One-tap check-in from a Telegram reminder (web app + reminder service).** The owner tapped "I'm still here" in Telegram; the service called `operator_check_in` from `checkin.thalderg.near` and the timer reset, with no wallet and no fee for the owner ([transaction](https://www.nearblocks.io/txns/DhutyWBrFoRWZYB8PSGqg5ahS1eXBpFeEsVp5PEFk7pV)).
 
 **Earlier, on testnet (v1):** the MPC network signed for the contract ([8B7SJxyp…](https://testnet.nearblocks.io/txns/8B7SJxypdFyoFfZmZhLotzgUXv1Ug1R6PGUjuTYUCTnQ)), an heir signed after the deadline ([GJhRaWzs…](https://testnet.nearblocks.io/txns/GJhRaWzs346zxcNwrkb2gJa4iWBkqubTijW6s1qJJVCa)), and the expected refusals and an Ed25519 signature followed.
 
