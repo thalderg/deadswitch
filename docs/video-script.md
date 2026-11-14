@@ -4,7 +4,7 @@ Real mainnet transactions throughout. Voice-over in quotes; what's on screen in 
 
 ## Before recording
 
-1. **The timer run-out is a one-shot.** Once the timer runs out, `deadswitch.thalderg.near` is final: you're locked out of it for good, and the service sends the 0.5 wNEAR to Anna (0.35) and Marco (0.15). So record shots 1–5 first (as many takes as you like), and shot 6 once, at the end.
+1. **The timer run-out is a one-shot.** Once the timer runs out, `deadswitch.thalderg.near` is final: you're locked out of it for good, and the service sends everything (0.5 wNEAR, about 0.1 SOL and 0.0018 ETH) to Anna (60%) and Marco (40%). So record shots 1–5 first (as many takes as you like), and shot 6 once, at the end.
 2. **10-minute timer** (owner transaction, counts as a check-in):
    `near call deadswitch.thalderg.near set_timeout '{"timeout_secs":600}' --useAccount thalderg.near --networkId mainnet`
 3. **Demo reminders:** in `service/.env`, `DEMO_REMINDER_OFFSETS_SECONDS=300,120`, then restart the service. Reminders arrive 5 and 2 minutes before the deadline.
