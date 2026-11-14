@@ -1,4 +1,4 @@
-"""Builds docs/demo/deadswitch-demo.mp4: a silent, captioned walkthrough from the demo screenshots.
+"""Builds docs/demo/deadswitch-demo.mp4: a captioned walkthrough from the demo screenshots, with an original ambient soundtrack.
 
 Run from the repo root: python3 docs/demo/make_video.py   (needs Pillow and ffmpeg)
 """
@@ -146,6 +146,38 @@ SLIDES = [
     (card('Deadswitch', 'Peace of mind now, an impact that outlasts you. Built on NEAR Intents and Chain Signatures. A prototype, not a legal will.'), 5),
 ]
 
+def music(seconds, path, rate=44100):
+    """An original, calm ambient bed (no samples, no copyright): soft pad chords and a slow arpeggio."""
+    import numpy as np, wave
+    n = int(seconds * rate); t = np.arange(n) / rate
+    note = lambda m: 440 * 2 ** ((m - 69) / 12)
+    chords = [[57, 60, 64], [53, 57, 60], [48, 55, 64], [55, 59, 62]]   # Am, F, C, G
+    bar = 6.0
+    out = np.zeros(n)
+    for k in range(int(seconds / bar) + 1):
+        a, b = int(k * bar * rate), min(n, int((k + 1) * bar * rate + rate))
+        if a >= n: break
+        tt = t[a:b] - k * bar
+        env = np.minimum(1, tt / 1.5) * np.minimum(1, np.maximum(0, (bar + 1 - tt) / 1.5))
+        for m in chords[k % 4]:
+            f = note(m)
+            out[a:b] += env * 0.10 * (np.sin(2 * np.pi * f * tt) + 0.5 * np.sin(2 * np.pi * f * 1.003 * tt) + 0.25 * np.sin(2 * np.pi * f * 2 * tt))
+        for j, m in enumerate(chords[k % 4] + [chords[k % 4][0] + 12]):   # one note every 1.5 s, an octave up
+            s0 = a + int(j * 1.5 * rate); s1 = min(n, s0 + int(2.5 * rate))
+            if s0 >= n: break
+            tp = t[s0:s1] - t[s0]
+            out[s0:s1] += 0.06 * np.exp(-tp * 1.8) * np.sin(2 * np.pi * note(m + 12) * tp)
+    d = int(0.35 * rate)                                                # a soft echo
+    echo = np.zeros(n); echo[d:] = out[:-d] * 0.35
+    out = out + echo
+    fade = np.minimum(1, np.minimum(t / 3, (seconds - t) / 4))
+    out = out * np.maximum(fade, 0)
+    out = out / np.max(np.abs(out)) * 0.5
+    stereo = np.stack([out, np.roll(out, int(0.012 * rate))], axis=1)
+    with wave.open(path, 'wb') as w:
+        w.setnchannels(2); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes((stereo * 32767).astype('<i2').tobytes())
+
 def main():
     tmp = tempfile.mkdtemp()
     files, durs = [], []
@@ -161,7 +193,11 @@ def main():
         chain.append(f'{last}[{i}:v]xfade=transition=fade:duration={fade}:offset={offset:.2f}{out}')
         last = out
     chain.append(f'{last}format=yuv420p[out]')
-    args += ['-filter_complex', ';'.join(chain), '-map', '[out]', '-r', '30', '-c:v', 'libx264', '-crf', '20', '-movflags', '+faststart', os.path.join(HERE, 'deadswitch-demo.mp4')]
+    total = sum(durs) - fade * (len(durs) - 1)
+    wav = os.path.join(tmp, 'music.wav'); music(total, wav)
+    args += ['-i', wav]
+    args += ['-filter_complex', ';'.join(chain), '-map', '[out]', '-map', f'{len(files)}:a', '-r', '30', '-c:v', 'libx264', '-crf', '20',
+             '-c:a', 'aac', '-b:a', '160k', '-shortest', '-movflags', '+faststart', os.path.join(HERE, 'deadswitch-demo.mp4')]
     subprocess.run(args, check=True)
     print('wrote', os.path.join(HERE, 'deadswitch-demo.mp4'), f'({sum(durs) - fade * (len(durs) - 1):.0f} s)')
 
