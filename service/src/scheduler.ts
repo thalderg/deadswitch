@@ -22,17 +22,24 @@ export function scheduleFor(s: Status) {
 
 async function remind(s: Status) {
   const { deadline, times, lastScheduled, lastSentAt } = scheduleFor(s);
-  const now = Date.now();
-  const due = dueReminder(times, now, lastScheduled, lastSentAt, config.demoOffsets.length > 0);
+  const due = dueReminder(times, Date.now(), lastScheduled, lastSentAt, config.demoOffsets.length > 0);
   if (due === null) return;
+  await sendReminder(s, due, times, deadline, true);
+}
 
+/**
+ * Sends one reminder (email and/or Telegram) with a fresh one-time link. Older links stop
+ * working. With `record` false (the test command) it doesn't count towards the schedule.
+ */
+export async function sendReminder(s: Status, due: number, times: number[], deadline: number, record: boolean) {
+  const now = Date.now();
   const st = getSettings(config.ownerId);
   const byEmail = !!(st.email_enabled && st.email && emailEnabled());
   const byTelegram = !!(st.tg_enabled && st.tg_chat_id && telegramEnabled());
   if (!byEmail && !byTelegram) {
-    db.prepare('INSERT INTO reminders (owner, scheduled_for, sent_at, channels) VALUES (?, ?, ?, ?)').run(config.ownerId, due, now, 'none');
+    if (record) db.prepare('INSERT INTO reminders (owner, scheduled_for, sent_at, channels) VALUES (?, ?, ?, ?)').run(config.ownerId, due, now, 'none');
     log.warn('A reminder was due, but no channel is set up (email or Telegram).');
-    return;
+    return [];
   }
 
   /* A new link: the previous ones stop working now. This one works until the next reminder. */
@@ -51,8 +58,9 @@ async function remind(s: Status) {
     try { await sendTelegram(st.tg_chat_id!, reminderText(msg), token); channels.push('telegram'); }
     catch (e) { log.warn(`Telegram reminder failed: ${(e as Error).message}`); }
   }
-  db.prepare('INSERT INTO reminders (owner, scheduled_for, sent_at, channels) VALUES (?, ?, ?, ?)').run(config.ownerId, due, now, channels.join(',') || 'failed');
+  if (record) db.prepare('INSERT INTO reminders (owner, scheduled_for, sent_at, channels) VALUES (?, ?, ?, ?)').run(config.ownerId, due, now, channels.join(',') || 'failed');
   log.info(`Reminder sent (${channels.join(' + ') || 'nothing delivered'}); the plan runs ${new Date(deadline).toISOString()}.`);
+  return channels;
 }
 
 /* At the deadline: sweep every token with a balance, then tell the heirs once. */

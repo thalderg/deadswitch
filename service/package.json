@@ -10,7 +10,8 @@
     "dev": "tsx watch --env-file=.env src/index.ts",
     "start": "tsx --env-file=.env src/index.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "reminder:test": "tsx --env-file=.env src/send-test-reminder.ts"
   },
   "dependencies": {
     "near-api-js": "^7.5.3"
