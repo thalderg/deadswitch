@@ -3,3 +3,9 @@ scripts/intent-payload.*
 scripts/execute-args.json
 intent-payload.*
 execute-args.json
+node_modules/
+web/.env
+web/dist/
+service/.env
+service/data/
+*.tsbuildinfo
