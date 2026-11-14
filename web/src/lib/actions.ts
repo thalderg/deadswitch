@@ -30,14 +30,9 @@ export async function checkinFree(wallet: ReturnType<typeof useWallet>): Promise
   if (!auth) return { kind: 'needs-paid', reason: 'Your wallet can’t sign messages.' };
   try {
     const result = await service.walletCheckin(auth);
-    if (result.status === 'checked_in') return { kind: 'free', result };
-    if (result.status === 'closed') return { kind: 'free', result };
-    return {
-      kind: 'needs-paid',
-      reason: result.status === 'too_soon'
-        ? 'The free check-in was already used a moment ago.'
-        : 'Reminder check-ins are turned off in your settings.',
-    };
+    /* "Too soon" means you were checked in a moment ago: no reason to pay for another one. */
+    if (result.status !== 'operator_off') return { kind: 'free', result };
+    return { kind: 'needs-paid', reason: 'Free check-ins are turned off in your settings (“Let reminders check me in”).' };
   } catch (e) {
     if (e instanceof ServiceUnavailable) return { kind: 'needs-paid', reason: 'The reminder service isn’t reachable right now.' };
     throw e;

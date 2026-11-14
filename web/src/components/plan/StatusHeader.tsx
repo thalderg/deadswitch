@@ -42,7 +42,10 @@ export function StatusHeader({ plan, reload }: { plan: Plan; reload: () => void 
     setPaidReason('');
     const out = await checkinFree(wallet);
     if (out.kind === 'needs-paid') { setPaidReason(out.reason); return; }
-    if (out.kind === 'free' && out.result.status === 'closed') return { kind: 'err', text: 'Your plan has already run, so check-ins are closed.' };
+    const r = out.kind === 'free' ? out.result : null;
+    if (r?.status === 'closed') return { kind: 'err', text: 'Your plan has already run, so check-ins are closed.' };
+    if (r?.status === 'too_soon') return { kind: 'ok', text: `You’re already checked in. Your plan runs on ${utcDateTime(r.deadlineMs)}.` };
+    if (r?.status === 'checked_in' && r.dryRun) return { kind: 'ok', text: 'Your signature was accepted, but the reminder service is in test mode (DRY_RUN), so nothing was sent and your timer didn’t change.' };
     return { kind: 'ok', text: 'You’re checked in. Your timer starts again from now. It was free: we paid the network fee.' };
   });
   const paidCheckin = () => run('ping', async () => {

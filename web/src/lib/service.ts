@@ -20,8 +20,8 @@ export interface ServiceSettings {
 }
 
 export type CheckinResult =
-  | { status: 'checked_in'; txHash?: string }
-  | { status: 'too_soon' }
+  | { status: 'checked_in'; txHash?: string; dryRun?: boolean; deadlineMs: number }
+  | { status: 'too_soon'; deadlineMs: number }
   | { status: 'operator_off' }
   | { status: 'closed' };
 
