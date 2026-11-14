@@ -65,6 +65,12 @@ export class HttpError extends Error {
 
 export type TokenState = 'valid' | 'used' | 'expired' | 'unknown';
 
+/** Which channel already answered a reminder (for the "already answered" message). */
+export function usedVia(token: string): 'email' | 'telegram' | null {
+  const row = db.prepare('SELECT used_via FROM checkin_tokens WHERE hash = ?').get(sha256(token)) as { used_via: string | null } | undefined;
+  return (row?.used_via as 'email' | 'telegram' | null) ?? null;
+}
+
 export function tokenState(token: string): TokenState {
   const row = db.prepare('SELECT expires_at, used_at FROM checkin_tokens WHERE hash = ?').get(sha256(token)) as { expires_at: number; used_at: number | null } | undefined;
   if (!row) return 'unknown';
@@ -78,7 +84,7 @@ export async function checkinWithToken(token: string, source: 'email' | 'telegra
   if (state !== 'valid') return { status: state };
   const result = await operatorCheckin(source);
   if (result.status === 'checked_in' || result.status === 'too_soon') {
-    db.prepare('UPDATE checkin_tokens SET used_at = ? WHERE hash = ?').run(Date.now(), sha256(token));
+    db.prepare('UPDATE checkin_tokens SET used_at = ?, used_via = ? WHERE hash = ?').run(Date.now(), source, sha256(token));
   }
   return result;
 }

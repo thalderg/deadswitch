@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS sweeps (
 CREATE TABLE IF NOT EXISTS heir_notices (owner TEXT NOT NULL, deadline_ms INTEGER NOT NULL, sent_at INTEGER NOT NULL, PRIMARY KEY (owner, deadline_ms));
 `);
 
+/* Which channel answered a reminder: 'email' or 'telegram'. */
+try { db.exec('ALTER TABLE checkin_tokens ADD COLUMN used_via TEXT'); } catch { /* already there */ }
+
 export const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 /** URL-safe random token; 32 bytes -> 43 characters (fits Telegram's 64-byte callback data). */
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString('base64url');

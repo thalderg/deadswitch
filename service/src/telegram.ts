@@ -1,6 +1,6 @@
 import { config } from './config';
 import { db, randomToken, updateSettings } from './db';
-import { checkinWithToken } from './checkin';
+import { checkinWithToken, usedVia } from './checkin';
 import { humanDuration, utcDateTime } from './format';
 import { log } from './log';
 
@@ -79,7 +79,7 @@ async function handle(u: Update) {
       const r = await checkinWithToken(cb.data, 'telegram');
       reply = r.status === 'checked_in' ? `You’re checked in.${'dryRun' in r && r.dryRun ? ' (Test mode: nothing was sent.)' : ''} Your plan now runs on ${utcDateTime(r.deadlineMs)}, in ${humanDuration(r.deadlineMs - Date.now())}.`
         : r.status === 'too_soon' ? `You’re already checked in. Your plan runs on ${utcDateTime(r.deadlineMs)}.`
-          : r.status === 'used' ? 'This button was already used. You’re checked in.'
+          : r.status === 'used' ? `You already answered this reminder${usedVia(cb.data) === 'email' ? ' from the email' : ''}. Each reminder can be answered once.`
             : r.status === 'expired' ? 'This button has expired. Use the newest reminder, or check in on the website.'
               : r.status === 'closed' ? 'Your plan has already run, so check-ins are closed.'
                 : r.status === 'operator_off' ? 'Reminder check-ins are turned off in your settings. Check in on the website instead.'

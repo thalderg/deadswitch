@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { randomInt } from 'node:crypto';
 import { config } from './config';
 import { db, getSettings, lastCheckin, sha256, updateSettings } from './db';
-import { checkinWithToken, checkSigned, HttpError, operatorCheckin, tokenState } from './checkin';
+import { checkinWithToken, checkSigned, HttpError, operatorCheckin, tokenState, usedVia } from './checkin';
 import { getStatus } from './near';
 import { scheduleFor } from './scheduler';
 import { emailEnabled, sendEmail } from './email';
@@ -136,7 +136,7 @@ route('POST', /^\/api\/checkin\/wallet$/, async (req, res) => {
 /* One-time links. GET only shows a page (email scanners open links); POST checks in. */
 route('GET', /^\/checkin\/([A-Za-z0-9_-]{20,100})$/, async (_req, res, m) => {
   const state = tokenState(m[1]);
-  if (state !== 'valid') return send(res, 200, tokenPage(state), 'text/html');
+  if (state !== 'valid') return send(res, 200, tokenPage(state, usedVia(m[1])), 'text/html');
   send(res, 200, page('Check in', `<h1>Are you still here?</h1><p>Press the button to reset your timer. That’s all it does: no wallet, no signature, no fee.</p>
 <form method="post"><button type="submit">Check in</button></form>`), 'text/html');
 });
@@ -150,15 +150,15 @@ route('POST', /^\/checkin\/([A-Za-z0-9_-]{20,100})$/, async (_req, res, m) => {
     if (r.status === 'too_soon') return send(res, 200, page('Checked in', `<h1>You’re already checked in.</h1><p>Your plan runs on ${escapeHtml(utcDateTime(r.deadlineMs))}.</p>`), 'text/html');
     if (r.status === 'closed') return send(res, 200, page('Plan has run', '<h1>Your plan has already run.</h1><p>Check-ins are closed.</p>'), 'text/html');
     if (r.status === 'operator_off') return send(res, 200, page('Not checked in', '<h1>Not checked in</h1><p>Reminder check-ins are turned off in your settings. Check in on the website instead.</p>'), 'text/html');
-    send(res, 200, tokenPage(r.status), 'text/html');
+    send(res, 200, tokenPage(r.status, usedVia(m[1])), 'text/html');
   } catch (e) {
     log.warn(`Link check-in failed: ${(e as Error).message}`);
     send(res, 502, page('Not checked in', '<h1>Something went wrong</h1><p>You’re not checked in yet. Try the button again in a minute, or check in on the website.</p>'), 'text/html');
   }
 });
 
-function tokenPage(state: string) {
-  const text = state === 'used' ? ['This link was already used', 'You’re checked in. Each link works once.']
+function tokenPage(state: string, via: 'email' | 'telegram' | null = null) {
+  const text = state === 'used' ? ['You already answered this reminder', `${via === 'telegram' ? 'You answered it in Telegram. ' : via === 'email' ? 'You answered it from this email. ' : ''}Each reminder can be answered once.`]
     : state === 'expired' ? ['This link has expired', 'A newer reminder replaced it. Use the newest one, or check in on the website.']
       : ['This link isn’t valid', 'Check in on the website instead.'];
   return page(text[0], `<h1>${text[0]}</h1><p>${text[1]}</p>`);
