@@ -96,7 +96,10 @@ async function handle(u: Update) {
 /** Long-polls Telegram for messages and button taps (no public URL needed). */
 export async function startTelegram() {
   if (!telegramEnabled()) { log.info('Telegram is off (no TELEGRAM_BOT_TOKEN).'); return; }
-  try { log.info(`Telegram bot @${await botName()} is listening.`); } catch (e) { log.warn(`Telegram bot not reachable: ${(e as Error).message}`); return; }
+  for (;;) {
+    try { log.info(`Telegram bot @${await botName()} is listening.`); break; }
+    catch (e) { log.warn(`Telegram bot not reachable (${(e as Error).message}); retrying in 10 s.`); await new Promise((r) => setTimeout(r, 10_000)); }
+  }
   let offset = 0;
   for (;;) {
     try {
