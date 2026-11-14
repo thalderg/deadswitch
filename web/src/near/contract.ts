@@ -58,6 +58,12 @@ export async function tokenInfo(id: string): Promise<TokenInfo> {
   return info;
 }
 
+/** Balances of `accountId` in NEAR Intents for the given tokens. */
+export async function intentsBalancesOf(accountId: string, tokens: TokenInfo[]): Promise<Balance[]> {
+  const amounts = await view<string[]>(INTENTS_ID, 'mt_batch_balance_of', { account_id: accountId, token_ids: tokens.map((t) => t.id) });
+  return tokens.map((t, i) => ({ ...t, amount: amounts[i] ?? '0' }));
+}
+
 /** Every token the owner holds in NEAR Intents, plus the configured ones. */
 export async function intentsBalances(accountId: string): Promise<Balance[]> {
   let ids: string[] = [];

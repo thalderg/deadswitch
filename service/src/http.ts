@@ -68,6 +68,13 @@ const route = (method: string, path: RegExp, h: Handler) => routes.push([method,
 
 route('GET', /^\/api\/health$/, async (_q, res) => send(res, 200, { ok: true, dryRun: config.dryRun }));
 
+/* The plan's payouts the service carried out (public: they're on-chain anyway). */
+route('GET', /^\/api\/payouts$/, async (_q, res) => {
+  const rows = db.prepare("SELECT deadline_ms, token_id, tx, payouts FROM sweeps WHERE tx IS NOT NULL AND tx != 'dry-run' ORDER BY deadline_ms DESC")
+    .all() as { deadline_ms: number; token_id: string; tx: string; payouts: string }[];
+  send(res, 200, { payouts: rows.map((r) => ({ deadlineMs: r.deadline_ms, tokenId: r.token_id, tx: r.tx, payouts: JSON.parse(r.payouts ?? '[]') })) });
+});
+
 route('GET', /^\/api\/settings$/, async (req, res) => {
   const owner = new URL(req.url!, 'http://x').searchParams.get('owner') ?? config.ownerId;
   if (owner !== config.ownerId) throw new HttpError(404, 'This service only handles one plan.');

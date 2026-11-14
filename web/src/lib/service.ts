@@ -41,7 +41,10 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+export interface PayoutRecord { deadlineMs: number; tokenId: string; tx: string; payouts: { account_id: string; amount: string }[] }
+
 export const service = {
+  payouts: () => req<{ payouts: PayoutRecord[] }>('/api/payouts'),
   settings: (owner: string) => req<ServiceSettings>(`/api/settings?owner=${encodeURIComponent(owner)}`),
   saveSettings: (auth: SignedRequest, patch: Partial<Pick<ServiceSettings, 'emailEnabled' | 'telegramEnabled' | 'notifyHeirs' | 'heirContacts'>>) =>
     req<ServiceSettings>('/api/settings', { method: 'POST', body: JSON.stringify({ auth, patch }) }),
