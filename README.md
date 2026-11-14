@@ -283,8 +283,8 @@ near call <contract>.near sweep "{\"token_id\":\"nep141:wrap.near\",\"amount\":\
 - [x] Contract v5: timer, owner lockout, testament with change delay, modes, panic button, check-in operator, sweep through an MPC-signed intent
 - [x] 50 unit tests
 - [x] Tested on NEAR mainnet with the real MPC network and NEAR Intents
-- [ ] Web app: setup, plan, Check in button, panic button, heir view
-- [ ] Reminder service: email and Telegram, one-tap check-ins, automatic sweep, optional messages to heirs
+- [x] Web app: setup, plan, Check in button, panic button, heir view
+- [x] Reminder service: email and Telegram, one-tap check-ins, automatic sweep, optional messages to heirs
 - [ ] Demo with a real non-NEAR asset (SOL or ETH) held in Intents
 
 ## Known limitations
