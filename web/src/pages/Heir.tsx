@@ -51,7 +51,7 @@ function HeirView({ plan, reload }: { plan: Plan; reload: () => void }) {
 
   /* Before it runs: what each would get from today's balances. After: what the payouts sent them. */
   const share = (account: string) => triggered && payouts.length
-    ? list(payouts.flatMap((p) => p.payouts.filter((x) => x.account_id === account).map((x) => ({ amount: x.amount, ...meta(p.tokenId) }))))
+    ? list(payouts.flatMap((p) => p.payouts.filter((x) => x.account_id === account).map((x) => ({ ...meta(p.tokenId), amount: x.amount }))))
     : list(funded.flatMap((b) => {
       const p = plan.preview[b.id]?.find((x) => x.account_id === account);
       return p ? [{ amount: p.amount, decimals: b.decimals, symbol: b.symbol }] : [];

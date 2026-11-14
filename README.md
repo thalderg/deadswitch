@@ -12,6 +12,8 @@ In crypto, your capital is at risk every day. Keys leak, people get forced to ha
 - **If your keys are at risk**, a panic button sends everything to the people in your plan immediately.
 - **We remind you** by email or Telegram before your timer runs out. One tap checks you in: no wallet, no fees.
 
+**[See the full demo on NEAR mainnet →](DEMO.md)**: a real run where nobody checked in and the switch sent NEAR, SOL and ETH to the people in the plan by itself, with every transaction linked and a 90-second captioned video.
+
 > A hackathon prototype, not a legal will.
 
 ---
@@ -50,6 +52,58 @@ Set at deploy and changeable later (off at once, on after the change delay):
 | Timer only | Your plan runs if you stop checking in |
 | Timer + panic button | Plus: you can send everything to your plan at any time |
 | Panic button only | No timer; only you can send, whenever you decide |
+
+---
+
+## Under the hood: how your crypto moves without your signature
+
+This is what makes Deadswitch possible, and it shows what NEAR Intents and Chain Signatures can do together: **a contract moves many kinds of crypto, from many blockchains, out of your own account, without you signing anything and without anyone holding the key.**
+
+### The pieces
+
+| Piece | What it is | In plain words |
+| --- | --- | --- |
+| **NEAR Intents** (`intents.near`) | One ledger that holds assets from many chains: BTC, ETH, SOL, USDC, NEAR… | A single account where all your crypto sits side by side, whatever chain it came from. |
+| **Your Intents account** (`thalderg.near`) | Your balances in that ledger, controlled by the keys you register | Your funds. They stay here until the moment they move. |
+| **Chain Signatures** (the MPC network, `v1.signer`) | Independent nodes that sign together; the full key never exists in one place | A safe that needs many keyholders to turn their keys at once, and only opens for the contract that owns that drawer. |
+| **The estate key** | A key derived for `deadswitch.thalderg.near` with the path `estate:intents` | A key nobody has: only the MPC network can sign with it, and only when the contract asks. |
+| **The Deadswitch contract** | The rules: timer, who receives what, panic button, change delay | The judge that decides *if* and *where* the funds may move. |
+
+### Setting it up (once)
+
+1. **The contract gets its key.** The MPC network derives a public key from the contract's account name and the path `estate:intents`: here `ed25519:DDLPgZdq…aRJRSZc`. The private half is never assembled anywhere.
+2. **You give it one permission.** You add that public key to your own Intents account (`add_public_key` on `intents.near`). It's like adding a co-signer who can only act through the contract's rules. Your funds don't move, and you can remove the key any time.
+3. **You write the plan.** Who receives what, in the contract. Changes that add power wait 48 hours and can be cancelled.
+
+### When the plan runs (a few seconds)
+
+```mermaid
+sequenceDiagram
+    participant S as Anyone (the reminder service)
+    participant C as Deadswitch contract
+    participant M as MPC network (v1.signer)
+    participant I as NEAR Intents (intents.near)
+    S->>C: sweep(SOL) after the deadline
+    C->>C: Is the timer over? Write the payment:<br/>60% to Anna, 40% to Marco
+    C->>M: Sign this with my estate:intents key
+    M-->>C: Signature (the nodes sign together)
+    C->>I: Execute this signed intent
+    I->>I: Is the key registered on thalderg.near? Yes
+    I-->>I: Move SOL: thalderg.near → anna, marco
+```
+
+1. **Someone calls `sweep`.** Anyone can, once the deadline has passed; the reminder service does it automatically. The caller only chooses *which* asset; it can't choose *where* it goes.
+2. **The contract writes the payment itself.** One transfer intent: "from `thalderg.near`, pay 60% to `anna.thalderg.near` and 40% to `marco.thalderg.near`", valid for one hour, with a one-time nonce so it can never be replayed. The destinations come only from the plan.
+3. **The MPC network signs it.** The contract asks `v1.signer` to sign with its `estate:intents` key. The independent nodes produce one signature together; no single node can sign alone.
+4. **NEAR Intents checks and moves the funds.** `intents.near` sees a valid signature from a key registered on your account and moves the balances inside its ledger, straight from your account to theirs. Nothing passes through the contract.
+5. **Repeat per asset.** NEAR, SOL and ETH are each one call, and they all work the same way, because in NEAR Intents they're all just balances in one ledger. No gas on Bitcoin, Ethereum or Solana is needed at that moment; each person can withdraw to their own wallet on that chain later.
+
+### Why this matters
+
+- **No one holds your keys, and no one has to.** Not us, not your family, not a custodian.
+- **The rules are code.** The key can only be used by the contract, and the contract only pays the accounts in your plan.
+- **Many chains, one switch.** Everything you hold in NEAR Intents is covered by one permission and one plan.
+- **Your wallet never signs the payout.** That's the point: it has to work when you can't sign anymore.
 
 ---
 
@@ -146,7 +200,7 @@ Planned:
 **Today:** each person gets a percentage (basis points, adding up to 100%), applied to every token swept. Changes wait for the change delay and can be cancelled. A backup wallet of your own can be one of the "heirs", which turns the switch into recovery for a lost wallet.
 
 **Next:**
-- **Rules per asset**, for example "Anna gets the BTC, Marco the USDC".
+- **Rules per asset and exact amounts**, for example "Anna gets the BTC, Marco 2,000 USDC, the rest to a charity", instead of one percentage split for everything.
 - **Converting at payout**, since NEAR Intents can swap.
 - **Delivery straight to an heir's own wallet** (Bitcoin, Ethereum, Solana) through NEAR Intents withdrawals, so heirs don't need a NEAR account.
 - **Drafting from plain words** with a NEAR AI private model, confirmed by the owner. The AI never interprets the plan at payout time.
@@ -156,13 +210,14 @@ Planned:
 
 ## Roadmap
 
-- **Reminder service:** email and Telegram reminders on the schedule above, one-tap check-ins through the operator, automatic sweep at the deadline, optional messages to heirs. Then Discord and SMS.
-- **Confidential payouts** with NEAR Confidential Intents, so nobody can see who inherited what. Together with the private testament: neither the rules nor the payouts are public.
+- **Confidential by default.** near.com now keeps balances in NEAR's Confidential Intents by default (`intents.far`), where today's switch can't reach them: it only covers the public NEAR Intents account (`intents.near`), which near.com shows as a "legacy" asset. Next, Deadswitch protects confidential balances by default and pays out confidentially, so nobody can see what you hold or who inherited what. Together with the private testament, neither the rules nor the payouts are public.
+- **Add funds from the dashboard:** the plan account's Bitcoin, Ethereum and Solana deposit addresses, with pending deposits, so owners never have to find them elsewhere.
+- **Reminders:** Discord and SMS next to email and Telegram.
 - **Execution fee** as described in the business model.
 - **One contract for many owners**, each with their own settings and estate key (path `estate:<owner>`), instead of one contract per owner.
 - **Self-funded check-ins:** an optional capped deposit in your own switch that repays the operator per check-in, for people who'd rather not rely on the subscription.
 - **Locked deployment:** deleting the contract's full-access keys so nobody can ever change the code.
-- **Yield-bearing tokens** and per-asset rules in the testament.
+- **Yield-bearing tokens** in the plan, so funds keep earning until they move.
 
 ---
 
