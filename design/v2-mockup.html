@@ -1,0 +1,757 @@
+<title>Deadswitch v2 mockup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&display=swap">
+<style>
+/* Layout: fixed 76px icon rail on the left (top bar under 760px), content column max 1200px, a soft moonlight spotlight from above, glass surfaces with a faint tide glow. Single dark world by design. */
+:root{
+  --night:#05070D; --deep:#121A2E; --glass:rgba(16,24,36,.72); --rule:#232E48;
+  --moon:#EEF1F8; --mist:#A7B1C8; --tide:#7FD1C1; --tide-hi:#B4E8DD; --ember:#F0A35E;
+  --warn-bg:#221F24; --warn-line:#5B4A36; --warn-text:#F6D9BC;
+  --serif:'Instrument Serif',Georgia,'Times New Roman',serif;
+  --sans:Geist,'Helvetica Neue',Arial,sans-serif;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--night);color:var(--moon);font-family:var(--sans);font-size:16px;line-height:1.5}
+a{color:var(--tide)} a:hover{color:var(--tide-hi)}
+:focus-visible{outline:2px solid var(--tide);outline-offset:3px;border-radius:8px}
+h1,h2,h3{font-family:var(--serif);font-weight:400;margin:0;text-wrap:balance;color:var(--moon)}
+p{margin:0}
+
+.app{display:flex;min-height:100vh;position:relative;isolation:isolate}
+/* Light falling from above: a central spotlight plus two soft light columns at the sides */
+.app::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:
+    radial-gradient(ellipse 38% 55% at 50% -12%,rgba(150,185,230,.20),rgba(127,209,193,.05) 50%,transparent 75%),
+    linear-gradient(90deg,transparent 6%,rgba(70,110,170,.10) 13%,transparent 22%),
+    linear-gradient(90deg,transparent 76%,rgba(60,140,140,.10) 86%,transparent 95%),
+    linear-gradient(180deg,transparent 60%,rgba(127,209,193,.035))}
+.app::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;
+  background-image:radial-gradient(rgba(238,241,248,.05) 1px,transparent 1px);background-size:3px 3px;mix-blend-mode:overlay}
+
+/* Rail */
+.rail{flex:0 0 76px;padding:22px 14px;border-right:1px solid var(--rule);display:flex;flex-direction:column;align-items:center;gap:8px;position:sticky;top:0;height:100vh}
+.rail a{width:48px;height:48px;display:flex;align-items:center;justify-content:center;border-radius:14px;color:var(--mist);text-decoration:none}
+.rail a:hover{color:var(--moon);background:rgba(255,255,255,.04)}
+.rail a[aria-current="page"]{color:var(--moon);background:var(--deep)}
+.rail .mark{margin-bottom:18px}
+.rail svg{width:22px;height:22px}
+.rail .mark svg{width:30px;height:30px}
+
+main{flex:1 1 auto;min-width:0;padding-left:max(16px,min(56px,4vw));padding-right:max(16px,env(safe-area-inset-right,0px));padding-bottom:72px}
+.wrap{max-width:1200px;margin:0 auto}
+header.top{display:flex;flex-wrap:wrap;gap:16px;align-items:center;justify-content:space-between;padding-block:24px}
+.brand{font-family:var(--serif);font-size:30px}
+.pill{font-size:15px;border:1px solid var(--rule);border-radius:999px;padding:12px 18px;color:var(--moon)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:50px;padding:0 26px;border-radius:999px;font:500 16px/1 var(--sans);text-decoration:none;cursor:pointer;border:0;transition:background .2s,transform .2s}
+.btn.primary{background:var(--tide);color:var(--night)} .btn.primary:hover{background:var(--tide-hi);color:var(--night)}
+.btn.secondary{background:transparent;color:var(--moon);border:1px solid var(--rule)} .btn.secondary:hover{border-color:var(--mist);color:var(--moon)}
+.btn.small{min-height:44px;padding:0 18px;font-size:15px}
+.btn.ember{background:var(--ember);color:var(--night)}
+.btn.warn{background:transparent;color:var(--warn-text);border:1px solid var(--warn-line)}
+
+.glass{background:linear-gradient(160deg,rgba(22,34,44,.78),var(--glass) 55%);border:1px solid rgba(127,209,193,.13);border-radius:28px;padding:32px;display:flex;flex-direction:column;gap:20px;position:relative;overflow:hidden;
+  box-shadow:inset 0 1px 0 rgba(238,241,248,.06),0 30px 80px -40px rgba(0,0,0,.8);backdrop-filter:blur(14px)}
+.glass::after{content:"";position:absolute;inset:-40% -10% auto 30%;height:90%;pointer-events:none;
+  background:radial-gradient(ellipse at 50% 50%,rgba(90,190,150,.12),transparent 62%)}
+/* Big glowing panel, like a stage for its contents */
+.stage{border-radius:36px;padding:clamp(20px,4vw,48px);position:relative;overflow:hidden;border:1px solid rgba(127,209,193,.12);
+  background:radial-gradient(ellipse 70% 60% at 50% 0%,rgba(60,150,120,.30),transparent 70%),radial-gradient(ellipse 60% 50% at 80% 100%,rgba(50,90,160,.22),transparent 70%),#0B1220}
+.glass>*{position:relative;z-index:1}
+.glass h2{font-size:32px}
+.muted{color:var(--mist)}
+.small-print{font-size:14px;line-height:1.55;color:var(--mist)}
+.lead{font-size:17px;line-height:1.65;color:var(--mist)}
+
+/* Views */
+.view[hidden]{display:none!important}
+
+/* Landing */
+.hero{display:flex;flex-direction:column;align-items:center;gap:56px;padding-block:56px 80px;text-align:center}
+.hero-top{display:flex;flex-direction:column;align-items:center;gap:28px;max-width:980px}
+.hero h1{font-size:clamp(46px,8.6vw,112px);line-height:.95;letter-spacing:-.02em;
+  background:linear-gradient(180deg,#FFFFFF 30%,#B9C6DC);-webkit-background-clip:text;background-clip:text;color:transparent;
+  text-shadow:0 0 60px rgba(150,185,230,.12)}
+.hero-side{display:flex;flex-direction:column;align-items:center;gap:28px;max-width:620px}
+.hero-side p{font-size:clamp(17px,1.6vw,20px);line-height:1.6;color:var(--mist)}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.hero .row{justify-content:center}
+figure.scene{margin:0;width:100%;border-radius:32px;overflow:hidden;position:relative;background:#121A2E;border:1px solid rgba(127,209,193,.14);
+  box-shadow:0 0 0 1px rgba(0,0,0,.6),0 60px 120px -50px rgba(60,150,120,.35)}
+figure.scene canvas{display:block;width:100%;height:auto;aspect-ratio:1100/460;max-width:100%}
+figcaption{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 24px;padding:18px 28px;font-size:14px;color:var(--mist);text-align:left;background:#070B14;border-top:1px solid rgba(127,209,193,.10)}
+figcaption b{color:var(--moon);font-weight:500}
+.heir-legend{display:none;flex-wrap:wrap;gap:8px 18px;color:var(--moon)}
+.heir-legend span::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--tide);margin-right:8px;vertical-align:1px}
+@media (max-width:700px){.heir-legend{display:flex}}
+@keyframes breathe{0%,100%{transform:scale(1);opacity:.55}50%{transform:scale(1.14);opacity:1}}
+.breath{transform-box:fill-box;transform-origin:center;animation:breathe 6s ease-in-out infinite}
+
+section.block{display:flex;flex-direction:column;gap:24px;padding-block:32px 72px}
+section.block>h2{font-size:clamp(36px,5vw,52px);line-height:1.05}
+.risk{display:flex;flex-wrap:wrap;gap:12px 48px;padding-block:28px;border-top:1px solid var(--rule)}
+.risk .q{flex:1 1 360px;font-family:var(--serif);font-size:30px;line-height:1.15}
+.risk .a{flex:1 1 360px;max-width:560px;padding-top:6px}
+.two{display:flex;flex-wrap:wrap;gap:20px}
+.two>.glass{flex:1 1 380px;padding:40px}
+.two h3{font-size:38px}
+.two ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:12px;color:var(--mist);font-size:17px;line-height:1.6}
+ol.steps{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:32px}
+ol.steps li{flex:1 1 280px;display:flex;flex-direction:column;gap:14px;padding-top:24px;border-top:2px solid var(--tide)}
+ol.steps .n{font-family:var(--serif);font-size:44px;line-height:1;color:var(--tide)}
+ol.steps h3{font:600 21px/1.3 var(--sans)}
+.band{display:flex;flex-wrap:wrap;gap:28px 64px;align-items:center;justify-content:space-between;padding:44px;border-radius:32px;margin-bottom:72px}
+.band.outline{border:1px solid var(--rule)}
+.band>div{flex:1 1 360px;display:flex;flex-direction:column;gap:12px}
+.chips{flex:1 1 360px;margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:10px}
+.chips li{font-size:16px;font-weight:500;padding:12px 20px;border-radius:999px;border:1px solid var(--rule)}
+.chips li.more{border:0;padding:12px 4px;font-weight:400;color:var(--mist);font-size:15px}
+.trust{display:flex;flex-wrap:wrap;gap:36px}
+.trust>div{flex:1 1 280px;display:flex;flex-direction:column;gap:10px}
+.trust h3{font:600 20px/1.3 var(--sans)}
+footer.foot{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;padding-top:28px;border-top:1px solid var(--rule);font-size:14px;color:var(--mist)}
+
+/* Dashboard */
+.mock-note{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;padding:12px 16px;border:1px dashed var(--rule);border-radius:16px;font-size:14px;color:var(--mist)}
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:999px;padding:3px;gap:2px}
+.seg button{font:500 13px var(--sans);color:var(--mist);background:transparent;border:0;border-radius:999px;padding:7px 12px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--deep);color:var(--moon)}
+
+.status{display:flex;flex-direction:column;gap:28px;padding-block:32px 36px}
+.status-top{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-end;justify-content:space-between}
+.status-top>div{display:flex;flex-direction:column;gap:14px;max-width:720px;min-width:0}
+.status h1{font-size:clamp(44px,6vw,72px);line-height:1}
+.countdown{font-family:var(--serif);font-size:clamp(28px,3.4vw,40px);line-height:1.1;font-variant-numeric:tabular-nums}
+.countdown small{font-family:var(--sans);font-size:15px;color:var(--mist);display:block;margin-top:6px}
+
+.track{display:flex;flex-direction:column;gap:12px}
+.bar{position:relative;height:10px;border-radius:999px;background:linear-gradient(90deg,rgba(127,209,193,.10),rgba(127,209,193,.04));border:1px solid rgba(127,209,193,.14)}
+.bar .fill{position:absolute;inset:0 auto 0 0;border-radius:999px;background:linear-gradient(90deg,rgba(127,209,193,.35),var(--tide));transition:width .9s linear,background .6s}
+.bar .dot{position:absolute;top:50%;width:18px;height:18px;margin:-9px 0 0 -9px;border-radius:50%;background:var(--night);border:2px solid var(--tide);box-shadow:0 0 0 6px rgba(127,209,193,.12);transition:left .9s linear,border-color .6s}
+.track.late .fill{background:linear-gradient(90deg,rgba(246,217,188,.3),var(--warn-text))}
+.track.late .dot{border-color:var(--warn-text);box-shadow:0 0 0 6px rgba(246,217,188,.12)}
+.track-legend{display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 16px;font-size:14px;color:var(--mist);font-variant-numeric:tabular-nums}
+.track-legend b{color:var(--moon);font-weight:500}
+
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.span{grid-column:1/-1}
+
+.health{flex-direction:row;flex-wrap:wrap;align-items:center;gap:28px 40px}
+.health .calm{display:flex;align-items:center;gap:20px;flex:1 1 320px;min-width:0}
+.health .calm svg{flex:0 0 auto;width:72px;height:72px}
+.health h2{font-size:36px}
+.checks{flex:1 1 420px;margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px 24px}
+.checks li{display:flex;gap:10px;align-items:flex-start;font-size:15px;line-height:1.45}
+.checks li svg{flex:0 0 auto;width:18px;height:18px;margin-top:2px;color:var(--tide)}
+
+table.t{width:100%;border-collapse:collapse;font-size:16px}
+table.t caption{text-align:left;font-size:15px;color:var(--mist);padding-bottom:8px}
+table.t th,table.t td{padding:14px 0;border-top:1px solid var(--rule)}
+table.t th{text-align:left;font-weight:500}
+table.t td{text-align:right;font-variant-numeric:tabular-nums}
+table.t td.sub{color:var(--mist);padding-left:16px;width:1%;white-space:nowrap}
+
+.headrow{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
+.share{display:flex;flex-direction:column;gap:10px}
+.share .line{display:flex;justify-content:space-between;gap:12px;font-size:16px}
+.share .line span:last-child{font-variant-numeric:tabular-nums}
+.share .amt{font-size:14px;color:var(--mist);font-variant-numeric:tabular-nums}
+.sbar{height:6px;border-radius:999px;background:var(--rule)}
+.sbar>div{height:100%;border-radius:999px;background:linear-gradient(90deg,rgba(127,209,193,.45),var(--tide))}
+.pending{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:16px 18px;border-radius:18px;border:1px solid var(--warn-line);background:var(--warn-bg)}
+.pending p{font-size:15px;line-height:1.5;color:var(--warn-text)}
+
+.opts>div{display:flex;gap:16px;align-items:flex-start;padding-block:16px;border-top:1px solid var(--rule)}
+.opts input[type=checkbox]{width:22px;height:22px;margin:2px 0 0;accent-color:var(--tide);flex:0 0 auto}
+.opts label{display:flex;flex-direction:column;gap:4px;cursor:pointer;min-width:0}
+.opts label b{font-size:17px;font-weight:500}
+.opts label span{font-size:15px;line-height:1.55;color:var(--mist)}
+.tag{display:inline-block;font-size:13px;padding:3px 10px;border-radius:999px;border:1px solid var(--warn-line);color:var(--warn-text);margin-left:6px;vertical-align:2px}
+
+.panic{border-color:var(--warn-line)}
+.panic .btn{align-self:flex-start}
+.perm{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.perm>div{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 320px}
+.perm p{overflow-wrap:anywhere}
+
+.travel{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+select,input[type=text]{font:16px var(--sans);color:var(--moon);background:var(--night);border:1px solid var(--rule);border-radius:14px;min-height:44px;padding:0 14px}
+
+dialog{background:var(--deep);color:var(--moon);border:1px solid var(--rule);border-radius:28px;padding:32px;max-width:min(560px,calc(100vw - 32px));width:100%}
+dialog::backdrop{background:rgba(5,8,16,.72)}
+dialog h2{font-size:34px;margin-bottom:12px}
+dialog .actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}
+.heir-row{display:grid;grid-template-columns:minmax(0,1fr) 92px;gap:10px;align-items:start;margin-top:14px}
+.heir-row input{width:100%}
+.heir-row .pct{display:flex;align-items:center;gap:6px}
+.heir-row .pct input{width:64px;text-align:right}
+.hint{grid-column:1/-1;font-size:14px;display:flex;gap:6px;align-items:center;margin-top:-2px}
+.hint.ok{color:var(--tide)} .hint.bad{color:var(--warn-text)}
+.total{margin-top:16px;font-size:15px;color:var(--mist);font-variant-numeric:tabular-nums}
+
+@media (max-width:760px){
+  .rail{flex-basis:56px;padding:16px 6px;padding-left:max(6px,env(safe-area-inset-left,0px))}
+  .rail a{width:42px;height:42px}
+  main{padding-left:16px}
+  .grid{grid-template-columns:minmax(0,1fr)}
+  .glass{padding:24px}
+  .two>.glass{padding:28px}
+  .band{padding:28px}
+  figcaption{padding:14px 20px}
+}
+@media (prefers-reduced-motion:reduce){
+  .breath{animation:none}
+  .bar .fill,.bar .dot{transition:none}
+}
+</style>
+
+<div class="app">
+  <nav class="rail" aria-label="Main">
+    <a class="mark" href="#home" aria-label="Deadswitch home"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="13" fill="none" stroke="#7FD1C1" stroke-width="2"/><path d="M10.5 16.5l4 4 7-8" fill="none" stroke="#7FD1C1" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    <a href="#home" data-nav="home" title="Home" aria-label="Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg></a>
+    <a href="#plan" data-nav="plan" title="Your plan" aria-label="Your plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></a>
+    <a href="#plan" data-jump="who" title="Who receives what" aria-label="Who receives what"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 5a3 3 0 0 1 0 6"/><path d="M18 15c2 .5 3 2 3 5"/></svg></a>
+    <a href="#plan" data-jump="panic" title="Move everything now" aria-label="Move everything now"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg></a>
+    <a href="#home" data-jump="how" title="How it works" aria-label="How it works"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6"/><path d="M12 17h.01"/></svg></a>
+  </nav>
+
+  <main>
+  <div class="wrap">
+
+  <!-- ===================== LANDING ===================== -->
+  <div class="view" id="v-home">
+    <header class="top">
+      <span class="brand">Deadswitch</span>
+      <a class="btn primary" href="#plan">Connect wallet</a>
+    </header>
+
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-top">
+        <h1 id="hero-title">In crypto, your capital is at risk every day.</h1>
+        <div class="hero-side">
+          <p>Give it a plan. Your funds stay in your own NEAR Intents account, and if anything happens to you or your keys, everything goes exactly where you chose.</p>
+          <div class="row">
+            <a class="btn primary" href="#plan">Set up my plan</a>
+            <a class="btn secondary" href="#home" data-jump="how">See how it works</a>
+          </div>
+        </div>
+      </div>
+      <figure class="scene">
+        <canvas id="scene" width="1100" height="460" role="img" aria-label="On the left, seven restless wires, one for each coin you hold: Bitcoin, Ethereum, NEAR, USDC, USDT, Solana and Zcash, with an occasional flash. They run into a seed inside a pot shaped like the power symbol: your switch. A bonsai grows from it under a soft light. One branch splits into three twigs for Anna 50%, Marco 30% and a cause you care about 20%, if you stop checking in. Another leads to your backup wallet, if you lose access to yours. A low branch sends everything to safety now, if someone gets hold of your keys."></canvas>
+        <figcaption><span><b>Whatever happens, your plan holds.</b> A lost wallet key, suspicious activity, or something unexpected.</span><button type="button" class="btn secondary small" id="replay">Watch it grow again</button><span class="heir-legend"><span>Anna 50%</span><span>Marco 30%</span><span>A cause you care about 20%</span><span>Your backup wallet</span><span>Sent to safety, now</span></span></figcaption>
+      </figure>
+    </section>
+
+    <section class="block" aria-labelledby="risks-title">
+      <h2 id="risks-title">What could go wrong, and what happens instead</h2>
+      <div>
+        <div class="risk"><p class="q">Someone gets hold of your keys.</p><p class="a lead">Press one button and your funds move to the wallets you picked in advance, before anyone else can take them.</p></div>
+        <div class="risk"><p class="q">Someone forces you to hand over access.</p><p class="a lead">Your plan can’t be rewritten in a hurry. Every change waits 48 hours, and you can cancel it.</p></div>
+        <div class="risk"><p class="q">You lose access to your own wallet.</p><p class="a lead">Add a backup wallet of yours to the plan. When the timer runs out, your funds go there.</p></div>
+        <div class="risk"><p class="q">You’re gone, and nobody can reach your crypto.</p><p class="a lead">If you stop checking in, the people you chose receive their shares. No seed phrase changes hands.</p></div>
+        <div class="risk"><p class="q">You don’t want to trust a company with your money.</p><p class="a lead">Nothing is locked and nobody holds it for you. Your funds stay in your account until the moment they move.</p></div>
+      </div>
+    </section>
+
+    <section class="block" aria-labelledby="impact-title">
+      <div style="display:flex;flex-direction:column;gap:16px;max-width:760px">
+        <h2 id="impact-title" style="font-size:clamp(36px,5vw,52px);line-height:1.05">Peace of mind now. An impact that outlasts you.</h2>
+        <p class="lead">One plan covers both: protection while you’re here, and a clear path for your crypto when you’re not.</p>
+      </div>
+      <div class="two stage">
+        <div class="glass"><h3>While you’re here</h3><ul>
+          <li>Use your funds as you always do. Trading, swapping and withdrawing keep working.</li>
+          <li>Reminders arrive by email or Telegram, timed to your plan. One tap checks you in: no wallet, no fees.</li>
+          <li>If your keys are ever at risk, one button moves everything to safety.</li></ul></div>
+        <div class="glass"><h3>When you’re gone</h3><ul>
+          <li>Everything goes where you want it to go: family, friends, or a cause you care about.</li>
+          <li>Each person receives their share in their own account, ready to withdraw to their own wallet.</li>
+          <li>Your crypto keeps doing good after you, instead of being lost forever.</li></ul></div>
+      </div>
+    </section>
+
+    <section class="block" id="how" aria-labelledby="how-title">
+      <h2 id="how-title">Set it up once, then forget about it</h2>
+      <ol class="steps">
+        <li><span class="n">1</span><h3>Choose who receives what</h3><p class="lead">Connect your NEAR wallet and split your funds between the people and causes you choose.</p></li>
+        <li><span class="n">2</span><h3>Give the switch one permission</h3><p class="lead">Approve a single key on your NEAR Intents account. Your funds don’t move, and you can remove it any time.</p></li>
+        <li><span class="n">3</span><h3>Keep living your life</h3><p class="lead">We remind you before your timer runs out. Tap “I’m still here” in an email or Telegram message, or check in on the website.</p></li>
+      </ol>
+    </section>
+
+    <section class="band outline" aria-labelledby="covers-title">
+      <div><h2 id="covers-title" style="font-size:38px">Works with what you hold in NEAR Intents</h2>
+      <p class="lead">Real assets from many networks, in your own account. Each person can withdraw their share to their own wallet on that network.</p></div>
+      <ul class="chips"><li>NEAR</li><li>Bitcoin</li><li>Ethereum</li><li>Solana</li><li>USDC</li><li class="more">and every other token NEAR Intents supports</li></ul>
+    </section>
+
+    <section class="band glass" aria-labelledby="pricing-title" style="flex-direction:row;padding:44px">
+      <div><h2 id="pricing-title" style="font-size:clamp(36px,5vw,52px);line-height:1.05">Free during the beta</h2>
+      <p class="lead">After the beta, reminders by email and Telegram will cost about $10 a year, payable in USDC or any NEAR Intents token. Checking in is always free for you: we pay the network fee.</p></div>
+      <a class="btn primary" href="#plan" style="align-self:center">Set up my plan</a>
+    </section>
+
+    <section class="block" aria-labelledby="trust-title" style="padding-top:0">
+      <h2 id="trust-title">Built so nobody has to be trusted</h2>
+      <div class="trust">
+        <div><h3>No one holds the key</h3><p class="lead">The switch’s key is split across NEAR’s network of independent operators. The whole key never exists in one place.</p></div>
+        <div><h3>The rules are public</h3><p class="lead">An open contract decides when the key can be used, and your plan decides where funds go. Anyone can check both.</p></div>
+        <div><h3>You stay in control</h3><p class="lead">Change your plan, pause the switch or remove its permission whenever you want.</p></div>
+      </div>
+    </section>
+
+    <footer class="foot"><span>Built at NEAR HACKATHON on NEAR Intents and Chain Signatures.</span><span>A prototype, not a legal will.</span></footer>
+  </div>
+
+  <!-- ===================== DASHBOARD ===================== -->
+  <div class="view" id="v-plan" hidden>
+    <header class="top">
+      <span class="brand">Deadswitch</span>
+      <span class="pill">thalderg.near</span>
+    </header>
+
+    <div class="mock-note" role="group" aria-label="Mockup controls">
+      <span>Mockup controls (not in the app):</span>
+      <span class="seg" id="demo-mode">
+        <button type="button" data-mode="year" aria-pressed="true">180-day plan</button>
+        <button type="button" data-mode="late" aria-pressed="false">Last 10%</button>
+        <button type="button" data-mode="demo" aria-pressed="false">10-minute demo</button>
+      </span>
+    </div>
+
+    <section class="status" aria-labelledby="dash-title">
+      <div class="status-top">
+        <div>
+          <h1 id="dash-title">Your plan is active</h1>
+          <p class="lead" id="status-line">You last checked in 21 days ago, from a Telegram reminder.</p>
+        </div>
+        <div class="row">
+          <a href="#plan" data-jump="who">Preview what your heirs will see</a>
+          <button type="button" class="btn primary" id="checkin">Check in</button>
+        </div>
+      </div>
+      <div class="countdown" id="countdown" aria-live="off">158 days 20 h 41 min<small id="runs-on">Your plan runs on 12 May 2027 at 09:14 UTC if you don’t check in again.</small></div>
+      <div class="track" id="track">
+        <div class="bar" role="meter" aria-label="Time passed since your last check-in" aria-valuemin="0" aria-valuemax="100" aria-valuenow="12" id="bar"><div class="fill" id="fill" style="width:12%"></div><div class="dot" id="dot" style="left:12%"></div></div>
+        <div class="track-legend"><span>Last check-in: <b id="lc">24 Oct 2026</b></span><span><b id="pct-passed">12% passed</b> · <span id="pct-left">88% left</span></span><span>Plan runs: <b id="pr">12 May 2027</b></span></div>
+      </div>
+      <p class="small-print" id="checkin-note">Checking in is free: your wallet signs a message, and we pay the network fee.</p>
+    </section>
+
+    <div class="grid">
+      <section class="glass health span" aria-labelledby="health-title">
+        <div class="calm">
+          <svg viewBox="0 0 72 72" aria-hidden="true"><circle class="breath" cx="36" cy="36" r="30" fill="rgba(127,209,193,.10)"/><circle cx="36" cy="36" r="24" fill="none" stroke="#7FD1C1" stroke-width="2"/><path d="M27 37l6 6 12-13" fill="none" stroke="#7FD1C1" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div><h2 id="health-title">Everything is in place</h2><p class="muted">Your plan is ready for whatever happens. Nothing needs your attention.</p></div>
+        </div>
+        <ul class="checks">
+          <li><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>The switch has its permission</li>
+          <li><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>Reminders reach you by email and Telegram</li>
+          <li><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>Reminders can check you in</li>
+          <li><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>Every account in your plan exists</li>
+          <li><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10.5l4 4 8-9"/></svg>Your NEAR Intents account holds funds</li>
+        </ul>
+      </section>
+
+      <section class="glass" aria-labelledby="bal-title">
+        <h2 id="bal-title">Your NEAR Intents account</h2>
+        <table class="t"><caption>Your funds stay here and keep working as normal.</caption><tbody>
+          <tr><th scope="row">NEAR</th><td>0.50</td></tr>
+          <tr><th scope="row">Solana</th><td>0.12</td></tr>
+          <tr><th scope="row">USDC</th><td>40.00</td></tr>
+        </tbody></table>
+        <a href="https://near-intents.org" style="font-size:15px">Add funds on NEAR Intents</a>
+      </section>
+
+      <section class="glass" id="who" aria-labelledby="who-title">
+        <div class="headrow"><h2 id="who-title">Who receives what</h2><button type="button" class="btn secondary small" id="edit-open">Edit plan</button></div>
+        <div class="share"><div class="line"><span>anna.thalderg.near</span><span>70%</span></div><div class="sbar"><div style="width:70%"></div></div><span class="amt">If your plan ran today: 0.35 NEAR · 0.084 SOL · 28.00 USDC</span></div>
+        <div class="share"><div class="line"><span>marco.thalderg.near</span><span>30%</span></div><div class="sbar"><div style="width:30%"></div></div><span class="amt">If your plan ran today: 0.15 NEAR · 0.036 SOL · 12.00 USDC</span></div>
+        <div class="pending"><p>A change to your plan applies in 47 hours. Not you? Cancel it now.</p><button type="button" class="btn warn small">Cancel change</button></div>
+      </section>
+
+      <section class="glass" aria-labelledby="rem-title">
+        <h2 id="rem-title">Reminders</h2>
+        <p class="lead">We remind you before your plan runs. Each message shows how long is left, and one tap checks you in.</p>
+        <div class="opts">
+          <div><input id="r-email" type="checkbox" checked><label for="r-email"><b>Email</b><span>you@example.com, verified.</span></label></div>
+          <div><input id="r-tg" type="checkbox" checked><label for="r-tg"><b>Telegram</b><span>Linked. Tap “I’m still here” right in the chat.</span></label></div>
+          <div><input id="r-heirs" type="checkbox"><label for="r-heirs"><b>Tell the people in my plan when it runs</b><span>Optional. They get a message with what they received and how to withdraw it.</span></label></div>
+        </div>
+        <div class="row"><button type="button" class="btn secondary small">Add deadline to my calendar</button><span class="small-print">A backup that works even if our messages don’t reach you.</span></div>
+        <p class="small-print">Monthly while there’s time, weekly in the last month, every 2 days in the last week, and daily in the last 2 days. Free during the beta.</p>
+      </section>
+
+      <section class="glass" aria-labelledby="set-title">
+        <h2 id="set-title">Settings</h2>
+        <div class="opts">
+          <div><input id="s-timer" type="checkbox" checked><label for="s-timer"><b>Carry out my plan if I stop checking in</b><span>After 180 days without a check-in, the people you chose receive their shares.</span></label></div>
+          <div><input id="s-panic" type="checkbox" checked><label for="s-panic"><b>Let me move everything at once</b><span>Adds a button that sends everything to the people in your plan immediately.</span></label></div>
+          <div><input id="s-op" type="checkbox" checked><label for="s-op"><b>Let reminders check me in</b><span>Allows the Deadswitch reminder service to reset your timer when you tap a reminder. It can’t do anything else.</span></label></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px;padding-top:16px;border-top:1px solid var(--rule)">
+          <b style="font-size:17px;font-weight:500">Going somewhere without signal?</b>
+          <span class="small-print" style="font-size:15px">Give yourself more time before your plan runs, so a long trip doesn’t set it off.</span>
+          <div class="travel"><label for="travel-len" class="small-print">I’ll be away for</label><select id="travel-len"><option>1 month</option><option selected>3 months</option><option>6 months</option></select><button type="button" class="btn secondary small">Extend my timer</button></div>
+        </div>
+        <p class="small-print">Turning something off applies right away. Turning something on, or changing your plan, waits 48 hours.</p>
+      </section>
+
+      <section class="glass panic span" id="panic" aria-labelledby="panic-title">
+        <h2 id="panic-title">Move everything now</h2>
+        <p class="lead">If you think your keys have been exposed, send all your funds to the people in your plan right now, before anyone else can move them.</p>
+        <button type="button" class="btn ember" id="panic-open">Send everything to my plan</button>
+        <p class="small-print">This can’t be undone. Funds only go to the accounts in your plan.</p>
+      </section>
+
+      <section class="glass perm" aria-labelledby="perm-title">
+        <div><h2 id="perm-title">Permission</h2>
+        <p class="small-print" style="font-size:15px">The switch’s key ed25519:DDLPgZdq…aRJRSZc is on your NEAR Intents account. Nobody holds its private half.</p></div>
+        <button type="button" class="btn secondary small">Remove permission</button>
+      </section>
+
+      <section class="glass perm" aria-labelledby="print-title">
+        <div><h2 id="print-title">For your family</h2>
+        <p class="small-print" style="font-size:15px">A one-page summary of your plan to keep with your papers: who receives what, where the funds are, and how to withdraw them. It contains no keys.</p></div>
+        <button type="button" class="btn secondary small">Open printable summary</button>
+      </section>
+    </div>
+  </div>
+
+  </div>
+  </main>
+</div>
+
+<dialog id="panic-dlg" aria-labelledby="panic-dlg-title">
+  <h2 id="panic-dlg-title">Send everything to your plan?</h2>
+  <p class="lead">This sends 0.50 NEAR, 0.12 SOL and 40.00 USDC to anna.thalderg.near (70%) and marco.thalderg.near (30%) now. It can’t be undone.</p>
+  <div class="actions"><button type="button" class="btn ember" data-close>Send everything</button><button type="button" class="btn secondary" data-close autofocus>Keep my funds</button></div>
+</dialog>
+
+<dialog id="edit-dlg" aria-labelledby="edit-dlg-title">
+  <h2 id="edit-dlg-title">Edit your plan</h2>
+  <p class="small-print" style="font-size:15px">Shares must add up to 100%. The change applies after 48 hours, and you can cancel it until then.</p>
+  <div class="heir-row"><input type="text" id="h1" value="anna.thalderg.near" aria-label="Account 1"><span class="pct"><input type="text" id="p1" value="50" aria-label="Share for account 1"> %</span><span class="hint ok">✓ Account found</span></div>
+  <div class="heir-row"><input type="text" id="h2" value="marco.thalderg.near" aria-label="Account 2"><span class="pct"><input type="text" id="p2" value="30" aria-label="Share for account 2"> %</span><span class="hint ok">✓ Account found</span></div>
+  <div class="heir-row"><input type="text" id="h3" value="savethechildern.near" aria-label="Account 3"><span class="pct"><input type="text" id="p3" value="20" aria-label="Share for account 3"> %</span><span class="hint bad">No NEAR account with this name. Check the spelling.</span></div>
+  <p class="total">Total: 100%</p>
+  <div class="actions"><button type="button" class="btn primary" data-close>Save change</button><button type="button" class="btn secondary" data-close>Cancel</button></div>
+</dialog>
+
+<script>
+(function(){
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- routing ---------- */
+  const views = {home: document.getElementById('v-home'), plan: document.getElementById('v-plan')};
+  function route(){
+    const name = location.hash.replace('#','') === 'plan' ? 'plan' : 'home';
+    for (const k in views) views[k].hidden = k !== name;
+    document.querySelectorAll('[data-nav]').forEach(a => { if (a.dataset.nav === name) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
+  }
+  addEventListener('hashchange', () => { route(); scrollTo(0,0); });
+  route();
+  document.querySelectorAll('[data-jump]').forEach(a => a.addEventListener('click', e => {
+    const target = a.dataset.jump;
+    setTimeout(() => document.getElementById(target)?.scrollIntoView({behavior: reduce ? 'auto' : 'smooth', block:'start'}), 30);
+  }));
+
+  /* ---------- hero: a few restless wires -> a bonsai that grows -> three outcomes ---------- */
+  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+  const cv = document.getElementById('scene');
+  const ctx = cv.getContext('2d');
+  const W = 1100, H = 460;
+  const BASE = {x: 556, y: 360};   // centre of the power-symbol pot
+  const RING = 34;
+  const rnd = mulberry32(20261114);
+  const pick = arr => arr[Math.floor(rnd()*arr.length)];
+  const smooth = (a,b,x) => { const t = Math.min(1, Math.max(0, (x-a)/(b-a))); return t*t*(3-2*t); };
+  const bez = (p0,p1,p2,p3,u) => { const v = 1-u; return [v*v*v*p0[0]+3*v*v*u*p1[0]+3*v*u*u*p2[0]+u*u*u*p3[0], v*v*v*p0[1]+3*v*v*u*p1[1]+3*v*u*u*p2[1]+u*u*u*p3[1]]; };
+
+  /* one restless wire per coin you hold, all ending in the switch */
+  const coins = ['Bitcoin','Ethereum','NEAR','USDC','USDT','Solana','Zcash','Any NEAR Intents asset'];
+  const wires = coins.map((name, i) => {
+    const p = () => [140 + rnd()*300, 60 + rnd()*340];
+    return {name, p0: [i === coins.length - 1 ? 196 : 130 + rnd()*50, 80 + i*40], c1: p(), c2: p(), c3: p(), end: BASE.y - 9 + i*2.4,
+      color: ['240,163,94','238,241,248','167,177,200'][i % 3], a: .55, w: 1.7,
+      ph: rnd()*Math.PI*2, sp: .6 + rnd()*1.0, amp: 22 + rnd()*30};
+  });
+  /* the bonsai: limbs as cubic curves [p0, p1, p2, p3, startWidth, endWidth, growFrom, growTo] */
+  const TRUNK = [[556,360],[556,300],[612,290],[566,226], 13, 7, 0, .32];
+  const limbs = [
+    TRUNK,
+    [[566,236],[560,214],[570,200],[562,186], 6, 3, .22, .4],              // apex
+    [[574,258],[604,226],[628,178],[662,152], 7, 3.5, .28, .52],           // plan branch
+    [[662,152],[676,128],[694,108],[716,96], 3.2, 1.6, .5, .66],           //   twig: Anna
+    [[662,152],[684,150],[702,150],[724,150], 3.2, 1.6, .52, .68],         //   twig: Marco
+    [[662,152],[676,174],[694,196],[714,206], 3.2, 1.6, .54, .7],          //   twig: cause
+    [[584,310],[616,318],[646,300],[690,292], 6.5, 2.6, .34, .58],         // backup branch
+    [[568,306],[606,326],[646,360],[684,372], 6, 2.4, .4, .64],            // panic branch
+    [[574,280],[546,270],[514,262],[488,262], 4.5, 2, .36, .56]            // small left branch, for balance
+  ];
+  /* foliage pads: centre, radius, when they appear */
+  const pads = [[562,184,30,.38],[718,96,22,.62],[728,150,22,.64],[716,208,22,.66],[694,290,26,.56],[688,372,24,.62],[486,260,22,.56],[640,170,20,.5]]
+    .map(([x,y,r,at]) => ({x, y, r, at, dots: Array.from({length: 26}, () => {
+      const a = rnd()*Math.PI*2, d = Math.sqrt(rnd());
+      return {dx: Math.cos(a)*r*d*1.25, dy: Math.sin(a)*r*d*.62 - r*.12, s: 3 + rnd()*5, g: pick(['90,180,130','127,209,193','150,225,185','70,160,120']), ph: rnd()*6};
+    })}));
+  /* where each branch leads */
+  const outs = [
+    {from: [716,96],  y: 70,  name: 'Anna', sub: '50%', at: .7},
+    {from: [724,150], y: 130, name: 'Marco', sub: '30%', at: .72},
+    {from: [714,206], y: 190, name: 'A cause you care about', sub: '20%', at: .74},
+    {from: [690,292], y: 290, name: 'Your backup wallet', sub: 'if you lose access to yours', at: .76},
+    {from: [684,372], y: 386, name: 'Sent to safety, now', sub: 'if someone gets hold of your keys', at: .78, ember: true}
+  ];
+
+  let bolt = null, flash = 0, nextFlash = 1.6;
+  function makeBolt(){
+    const pts = []; let x = 70 + rnd()*300, y = 40 + rnd()*60;
+    pts.push([x,y]);
+    for (let i = 0; i < 6; i++){ y += 16 + rnd()*20; x += (rnd() - .5)*36; pts.push([x,y]); }
+    return pts;
+  }
+
+  let scale = 1, wide = true;
+  function fit(){
+    const w = cv.clientWidth || W, dpr = Math.min(devicePixelRatio || 1, 2);
+    cv.width = Math.round(w*dpr); cv.height = Math.round(w*dpr*H/W);
+    scale = cv.width / W; wide = w > 700;
+  }
+  fit();
+  let lastT = 99, grow = 1, tg = 1, growing = false;
+  addEventListener('resize', () => { fit(); draw(lastT, 0); });
+  if (document.fonts) document.fonts.ready.then(() => draw(lastT, 0));
+
+  function limb([p0,p1,p2,p3,w0,w1,a,b], sway){
+    const k = smooth(a, b, tg); if (k <= 0) return;
+    const sw = ([x,y]) => [x + sway*(BASE.y - y)*.012, y];
+    const q0 = sw(p0), q1 = sw(p1), q2 = sw(p2), q3 = sw(p3);
+    const steps = 22, n = Math.max(1, Math.round(steps*k));
+    let prev = bez(q0,q1,q2,q3,0);
+    for (let i = 1; i <= n; i++){
+      const u = i/steps*Math.min(1, k*steps/n), pt = bez(q0,q1,q2,q3,u);
+      ctx.lineWidth = w0 + (w1 - w0)*u;
+      ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(pt[0], pt[1]); ctx.stroke();
+      prev = pt;
+    }
+  }
+
+  function draw(t, dt){
+    lastT = t;
+    tg = Math.max(0, (grow - .16)/.84);          // first the seed, then the tree
+    ctx.setTransform(scale,0,0,scale,0,0);
+    ctx.fillStyle = '#121A2E'; ctx.fillRect(0,0,W,H);
+    let g = ctx.createLinearGradient(0,0,520,0);
+    g.addColorStop(0,'rgba(5,7,13,.7)'); g.addColorStop(1,'rgba(5,7,13,0)');
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+    /* soft light falling on the tree */
+    g = ctx.createLinearGradient(0,0,0,BASE.y);
+    g.addColorStop(0,'rgba(200,225,240,.12)'); g.addColorStop(1,'rgba(127,209,193,.02)');
+    const LX = 610;   // the beam's centre line, over the middle of the tree
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(LX - 60, 0); ctx.lineTo(LX + 60, 0); ctx.lineTo(LX + 168, H); ctx.lineTo(LX - 168, H); ctx.closePath(); ctx.fill();
+    g = ctx.createRadialGradient(LX, 150, 0, LX, 150, 220);
+    g.addColorStop(0, 'rgba(200,225,240,.08)'); g.addColorStop(1, 'rgba(200,225,240,0)');
+    ctx.fillStyle = g; ctx.fillRect(LX - 220, 0, 440, H);
+
+    /* a flash now and then */
+    if (flash > 0 && bolt){
+      g = ctx.createRadialGradient(bolt[0][0], bolt[0][1] + 60, 0, bolt[0][0], bolt[0][1] + 60, 320);
+      g.addColorStop(0, `rgba(200,215,255,${.22*flash})`); g.addColorStop(1,'rgba(200,215,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0,0,560,H);
+      ctx.save(); ctx.strokeStyle = `rgba(240,244,255,${.8*flash})`; ctx.shadowColor = 'rgba(170,195,255,.9)'; ctx.shadowBlur = 16; ctx.lineWidth = 1.6; ctx.lineJoin = 'round';
+      ctx.beginPath(); bolt.forEach(([x,y],i) => i ? ctx.lineTo(x,y) : ctx.moveTo(x,y)); ctx.stroke(); ctx.restore();
+    }
+
+    /* the restless wires */
+    ctx.lineCap = 'round';
+    for (const w of wires){
+      const k = w.amp, s = Math.sin(t*w.sp + w.ph), c = Math.cos(t*w.sp*.8 + w.ph*1.3);
+      ctx.strokeStyle = `rgba(${w.color},${w.a + flash*.3})`; ctx.lineWidth = w.w;
+      ctx.beginPath();
+      const sx0 = w.p0[0] + s*k*.35, sy0 = w.p0[1] + c*k*.25;
+      ctx.moveTo(sx0, sy0);
+      ctx.bezierCurveTo(w.c1[0] + c*k, w.c1[1] + s*k, w.c2[0] - s*k, w.c2[1] + c*k, w.c3[0] + c*k*.7, w.c3[1] - s*k*.7);
+      ctx.bezierCurveTo(470 + s*k*.3, w.end + c*k*.3, 500, w.end, BASE.x - RING - 2, w.end);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(${w.color},.95)`; ctx.beginPath(); ctx.arc(sx0, sy0, 3.5, 0, 7); ctx.fill();
+      ctx.fillStyle = '#EEF1F8'; ctx.font = (wide ? '500 15px' : '500 26px') + ' Geist, Arial, sans-serif';
+      ctx.textAlign = 'right'; ctx.fillText(w.name, sx0 - 10, sy0 + 5); ctx.textAlign = 'left';
+    }
+
+    /* glow behind the tree, breathing slowly */
+    const breath = .5 + .5*Math.sin(t*2*Math.PI/6);
+    g = ctx.createRadialGradient(600, 250, 20, 600, 250, 190 + breath*20);
+    g.addColorStop(0, `rgba(127,209,193,${(.1 + breath*.06)*grow})`); g.addColorStop(1,'rgba(127,209,193,0)');
+    ctx.fillStyle = g; ctx.fillRect(380, 40, 440, 420);
+
+    /* lines from the branches to each outcome */
+    for (const o of outs){
+      const k = smooth(o.at, o.at + .2, tg); if (k <= 0) continue;
+      const end = [800, o.y], c1 = [o.from[0] + 50, o.from[1]], c2 = [740, o.y];
+      ctx.save(); ctx.lineCap = 'round'; ctx.strokeStyle = o.ember ? 'rgba(240,163,94,.9)' : '#7FD1C1'; ctx.lineWidth = 2;
+      ctx.shadowColor = o.ember ? 'rgba(240,163,94,.5)' : 'rgba(127,209,193,.5)'; ctx.shadowBlur = 8;
+      ctx.beginPath(); let first = true;
+      for (let u = 0; u <= k + .001; u += .04){ const [x,y] = bez(o.from, c1, c2, end, Math.min(u,1)); first ? ctx.moveTo(x,y) : ctx.lineTo(x,y); first = false; }
+      ctx.stroke(); ctx.shadowBlur = 0;
+      if (k > .98){
+        ctx.fillStyle = o.ember ? '#F0A35E' : '#7FD1C1'; ctx.beginPath(); ctx.arc(810, o.y, 7, 0, 7); ctx.fill();
+        if (wide){
+          ctx.fillStyle = '#EEF1F8'; ctx.font = '500 18px Geist, Arial, sans-serif'; ctx.fillText(o.name, 830, o.y - 3);
+          ctx.fillStyle = '#A7B1C8'; ctx.font = '14px Geist, Arial, sans-serif'; ctx.fillText(o.sub, 830, o.y + 17);
+        }
+      }
+      ctx.restore();
+    }
+    if (wide && grow > .9){
+      ctx.fillStyle = '#A7B1C8'; ctx.font = '14px Geist, Arial, sans-serif';
+      ctx.fillText('If you stop checking in', 830, 30);
+    }
+
+    /* the pot is the universal power symbol: an open ring; the trunk rises through its gap as the bar */
+    {
+      const br = .5 + .5*Math.sin(t*2*Math.PI/6);
+      g = ctx.createRadialGradient(BASE.x, BASE.y, RING - 6, BASE.x, BASE.y, RING + 40);
+      g.addColorStop(0, `rgba(127,209,193,${.12 + br*.08})`); g.addColorStop(1, 'rgba(127,209,193,0)');
+      ctx.fillStyle = g; ctx.fillRect(BASE.x - RING - 40, BASE.y - RING - 40, (RING + 40)*2, (RING + 40)*2);
+      ctx.save(); ctx.fillStyle = 'rgba(13,20,36,.9)'; ctx.beginPath(); ctx.arc(BASE.x, BASE.y, RING, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#7FD1C1'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+      ctx.shadowColor = 'rgba(127,209,193,.9)'; ctx.shadowBlur = 10 + 8*br;
+      ctx.beginPath(); ctx.arc(BASE.x, BASE.y, RING, -Math.PI/2 + .62, -Math.PI/2 - .62 + Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+
+    /* the seed: appears first, glows, then the tree sprouts from it */
+    {
+      const sk = smooth(0, .1, grow), pulse = .5 + .5*Math.sin(t*3);
+      const seedGlow = sk*(1 - .6*tg);
+      if (sk > 0){
+        const sx = BASE.x, sy = BASE.y;
+        g = ctx.createRadialGradient(sx, sy, 0, sx, sy, 60);
+        g.addColorStop(0, `rgba(127,209,193,${.45*seedGlow*(.7 + .3*pulse)})`); g.addColorStop(1, 'rgba(127,209,193,0)');
+        ctx.fillStyle = g; ctx.fillRect(sx - 60, sy - 60, 120, 120);
+        ctx.save(); ctx.fillStyle = '#E6FFF6'; ctx.shadowColor = 'rgba(127,209,193,1)'; ctx.shadowBlur = 18*sk;
+        ctx.beginPath(); ctx.ellipse(sx, sy, 8*sk, 5.5*sk, -.3, 0, 7); ctx.fill(); ctx.restore();
+        if (wide && tg < .05){ ctx.fillStyle = `rgba(167,177,200,${sk})`; ctx.font = '14px Geist, Arial, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('You plant one seed', sx, sy - 40); ctx.textAlign = 'left'; }
+      }
+    }
+
+    /* the tree */
+    const sway = reduce ? 0 : Math.sin(t*.6)*.9;
+    ctx.save(); ctx.lineCap = 'round';
+    g = ctx.createLinearGradient(0, BASE.y, 0, 90);
+    g.addColorStop(0, '#7FD1C1'); g.addColorStop(.3, '#A9B6CC'); g.addColorStop(1, '#D7DEEA');
+    ctx.strokeStyle = g; ctx.shadowColor = 'rgba(127,209,193,.35)'; ctx.shadowBlur = 6;
+    for (const l of limbs) limb(l, sway);
+    ctx.restore();
+    /* foliage: soft clouds of leaves, as on a bonsai */
+    ctx.save();
+    for (const p of pads){
+      const k = smooth(p.at, p.at + .18, tg); if (k <= 0) continue;
+      const sx = sway*(BASE.y - p.y)*.012;
+      ctx.shadowColor = 'rgba(127,209,193,.55)'; ctx.shadowBlur = 10;
+      for (const d of p.dots){
+        const wob = reduce ? 0 : Math.sin(t*1.1 + d.ph)*.8;
+        ctx.fillStyle = `rgba(${d.g},${.75*k})`;
+        ctx.beginPath(); ctx.ellipse(p.x + sx + d.dx*k + wob, p.y + d.dy*k, d.s*k, d.s*.7*k, .4, 0, 7); ctx.fill();
+      }
+    }
+    ctx.restore();
+
+    if (wide){
+      ctx.fillStyle = 'rgba(238,241,248,.8)'; ctx.font = '15px Geist, Arial, sans-serif';
+      ctx.fillText('A lost wallet key, suspicious activity, or something unexpected', 28, 40);
+      ctx.fillStyle = '#EEF1F8'; ctx.font = '500 16px Geist, Arial, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('Your switch', BASE.x, BASE.y + RING + 30); ctx.textAlign = 'left';
+      ctx.fillStyle = '#EEF1F8'; ctx.font = '28px "Instrument Serif", Georgia, serif'; ctx.textAlign = 'center';
+      ctx.globalAlpha = grow; ctx.fillText('Peace of mind', 600, 56); ctx.globalAlpha = 1; ctx.textAlign = 'left';
+    }
+  }
+
+  /* paint the full tree first, so the scene is never empty */
+  try { draw(99, 0); } catch (e) { console.error('scene', e); }
+  if (!reduce) {
+    let prev = performance.now(), t = 0, ticked = false;
+    setTimeout(() => { if (!ticked) setInterval(() => frame(performance.now(), true), 33); }, 600);
+    function frame(now, fromTimer){
+      if (!fromTimer) ticked = true;
+      const dt = Math.min(.05, (now - prev)/1000); prev = now;
+      if (!views.home.hidden){
+        t += dt;
+        if (growing){ grow = Math.min(1, grow + dt/6.5); if (grow >= 1) growing = false; }
+        nextFlash -= dt;
+        if (nextFlash <= 0){ bolt = makeBolt(); flash = 1; nextFlash = 4 + rnd()*4; }
+        flash = Math.max(0, flash - dt*3);
+        try { draw(t, dt); } catch (e) { console.error('scene', e); return; }
+      }
+      if (!fromTimer) requestAnimationFrame(frame);
+    }
+    frame(prev);
+    /* grow from the seed when the scene comes into view, and on request */
+    const startGrowth = () => { grow = 0; growing = true; };
+    let seen = false;
+    if ('IntersectionObserver' in window){
+      new IntersectionObserver((es, ob) => { if (!seen && es[0].isIntersecting){ seen = true; startGrowth(); ob.disconnect(); } }, {threshold: .35}).observe(cv);
+    } else startGrowth();
+    document.getElementById('replay').addEventListener('click', startGrowth);
+  } else {
+    document.getElementById('replay').hidden = true;
+  }
+
+  /* ---------- countdown bar ---------- */
+  const DAY = 864e5;
+  const modes = {
+    year: {timeout: 180*DAY, since: 21*DAY + 3*36e5, label: 'from a Telegram reminder'},
+    late: {timeout: 180*DAY, since: 166*DAY,          label: 'from the website'},
+    demo: {timeout: 10*6e4,  since: 3.4*6e4,          label: 'from an email reminder'}
+  };
+  let mode = 'year', last = Date.now() - modes.year.since, from = modes.year.label;
+  const $ = id => document.getElementById(id);
+  const fmtDate = ms => new Date(ms).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
+  const fmtLong = ms => new Date(ms).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}) + ' at ' + new Date(ms).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'UTC'}) + ' UTC';
+  function ago(ms){const d=Math.floor(ms/DAY); if(d>=2) return d+' days ago'; if(d===1) return 'yesterday'; const m=Math.floor(ms/6e4); if(m<1) return 'just now'; if(m<60) return m+(m===1?' minute':' minutes')+' ago'; const h=Math.floor(m/60); return h+(h===1?' hour':' hours')+' ago';}
+  function left(ms){
+    ms = Math.max(0, ms);
+    const d = Math.floor(ms/DAY), h = Math.floor(ms%DAY/36e5), m = Math.floor(ms%36e5/6e4), s = Math.floor(ms%6e4/1e3);
+    if (d >= 1) return `${d} days ${h} h ${String(m).padStart(2,'0')} min`;
+    if (h >= 1) return `${h} h ${String(m).padStart(2,'0')} min ${String(s).padStart(2,'0')} s`;
+    return `${m} min ${String(s).padStart(2,'0')} s`;
+  }
+  function tick(){
+    const now = Date.now(), t = modes[mode].timeout, deadline = last + t;
+    const passed = Math.min(100, Math.max(0, (now - last) / t * 100));
+    const p = passed < 10 ? passed.toFixed(1) : Math.round(passed);
+    const l = passed < 10 ? (100 - passed).toFixed(1) : 100 - Math.round(passed);
+    $('fill').style.width = passed + '%';
+    $('dot').style.left = passed + '%';
+    $('bar').setAttribute('aria-valuenow', Math.round(passed));
+    $('bar').setAttribute('aria-valuetext', `${p}% of the time passed, ${l}% left`);
+    $('pct-passed').textContent = p + '% passed';
+    $('pct-left').textContent = l + '% left';
+    $('track').classList.toggle('late', passed >= 90);
+    $('lc').textContent = mode === 'demo' ? new Date(last).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'UTC'}) + ' UTC' : fmtDate(last);
+    $('pr').textContent = mode === 'demo' ? new Date(deadline).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',timeZone:'UTC'}) + ' UTC' : fmtDate(deadline);
+    $('status-line').textContent = `You last checked in ${ago(now - last)}, ${from}.`;
+    $('countdown').firstChild.nodeValue = left(deadline - now);
+    $('runs-on').textContent = `Your plan runs on ${fmtLong(deadline)} if you don’t check in again.`;
+  }
+  tick(); setInterval(tick, 1000);
+
+  document.querySelectorAll('#demo-mode button').forEach(b => b.addEventListener('click', () => {
+    mode = b.dataset.mode; last = Date.now() - modes[mode].since; from = modes[mode].label;
+    document.querySelectorAll('#demo-mode button').forEach(x => x.setAttribute('aria-pressed', x === b));
+    tick();
+  }));
+  $('checkin').addEventListener('click', () => {
+    last = Date.now(); from = 'from the website'; tick();
+    $('checkin-note').textContent = 'You’re checked in. Your timer starts again from now.';
+  });
+
+  /* ---------- dialogs ---------- */
+  $('panic-open').addEventListener('click', () => $('panic-dlg').showModal());
+  $('edit-open').addEventListener('click', () => $('edit-dlg').showModal());
+  document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
+})();
+</script>
