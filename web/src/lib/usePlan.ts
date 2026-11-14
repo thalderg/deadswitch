@@ -57,7 +57,10 @@ export function usePlan() {
   /* Keep the plan fresh: chain state changes when reminders check you in. */
   useEffect(() => {
     const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
+    /* Also when you come back to the tab, e.g. from Telegram or your wallet. */
+    const onVisible = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', onVisible); };
   }, [load]);
 
   return { plan, error, loading, reload: load };

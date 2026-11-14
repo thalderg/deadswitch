@@ -82,7 +82,7 @@ function ReminderSettings({ s, plan, wallet, reload }: { s: ServiceSettings; pla
         {!s.telegramLinked && (
           <div style={{ display: 'block', borderTop: 0, paddingTop: 0 }}>
             <button type="button" className="btn secondary small" disabled={!!busy}
-              onClick={() => run('link', async () => { const { url } = await service.telegramLink(await signed()); window.open(url, '_blank', 'noopener'); return { kind: 'ok', text: <>Telegram opened. Press Start in the chat with our bot, then come back and reload. If nothing opened: <a href={url} target="_blank" rel="noreferrer">open the link</a>.</> }; })}>
+              onClick={() => run('link', async () => { const { url } = await service.telegramLink(await signed()); window.open(url, '_blank', 'noopener'); return { kind: 'ok', text: <>Telegram opened. Press Start in the chat with our bot, then come back here: this page updates by itself. If nothing opened: <a href={url} target="_blank" rel="noreferrer">open the link</a>.</> }; })}>
               Link Telegram
             </button>
           </div>
