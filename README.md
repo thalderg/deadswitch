@@ -85,12 +85,19 @@ Each reminder shows how much time is left, the exact date and time the plan runs
 
 ---
 
-## Business model
+## Pricing and business model
 
-- **Reminders subscription:** email and Telegram reminders, plus free one-tap check-ins (the subscription covers the operator's gas).
+**Free during the beta.** Nothing is charged in this prototype.
+
+Planned:
+- **Reminders subscription, about $10 a year,** paid in USDC or any NEAR Intents token (priced in dollars so it costs the same every year, whatever NEAR's price does). It covers email and Telegram reminders and free one-tap check-ins: the subscription tops up the check-in operator's account, which pays the gas.
 - **Later: a small fee only when a plan is carried out**, a percentage of what's sent, written into the contract and shown before you sign up. Free while you're alive; earned only when the service does its job.
 
-Both are planned; neither is charged in this prototype.
+**Who pays for what**
+- **The contract** only holds its storage deposit; it never pays for check-ins.
+- **The check-in operator** pays the gas for every check-in (about 0.0003 NEAR each). Checking in from a reminder or on the website is free for you.
+- **The website check-in** asks your wallet for a free signed message, not a transaction. Only if your wallet can't sign messages does the app fall back to a direct check-in from your wallet, which costs a fraction of a cent, and it tells you first.
+- **Carrying out the plan** costs whoever triggers it about 0.01–0.03 NEAR; in the full service, the operator does it.
 
 ---
 

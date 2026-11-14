@@ -231,3 +231,11 @@ The goal is a 2–3 minute video showing the whole flow, using real mainnet tran
 - **"Works with what you hold in NEAR Intents":** NEAR, Bitcoin, Ethereum, Solana, USDC, and every other token NEAR Intents supports.
 - **"Built so nobody has to be trusted":** No one holds the key. The rules are public. You stay in control.
 - **Footer:** "Built at NEAR HACKATHON on NEAR Intents and Chain Signatures." / "A prototype, not a legal will."
+
+## 9. Pricing (copy and behaviour)
+
+- Nothing is charged in this prototype. Don't build any payment flow.
+- Landing page: include the "Free during the beta" section from `design/landing.html` ("After the beta, reminders by email and Telegram will cost about $10 a year, payable in USDC or any NEAR Intents token. Checking in is always free for you: we pay the network fee.").
+- Dashboard, Reminders section: a short line "Free during the beta."
+- Website check-in: free for the user (signed message, operator pays). Only the `ping()` fallback costs the user gas; say so before asking the wallet to sign.
+- The operator account (`checkin.thalderg.near`) pays all check-ins and the automatic sweep. Show its NEAR balance in the service logs at startup, and warn in the logs when it drops below 0.1 NEAR.
