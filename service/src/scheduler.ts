@@ -9,7 +9,8 @@ import { formatAmount } from './format';
 import { log } from './log';
 
 const MAX_SWEEP_ATTEMPTS = 3;
-const TICK_MS = 10_000;
+/* The demo needs reminders within seconds of their time; otherwise once a minute is plenty. */
+const TICK_MS = config.demoOffsets.length ? 10_000 : 60_000;
 
 /** Reminder times for the current check-in period, given the chain status. */
 export function scheduleFor(s: Status) {

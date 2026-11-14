@@ -1,9 +1,12 @@
-import { Account, JsonRpcProvider, KeyPairSigner } from 'near-api-js';
+import { Account, FailoverRpcProvider, JsonRpcProvider, KeyPairSigner } from 'near-api-js';
 import { verifyMessage } from 'near-api-js/nep413';
 import { config } from './config';
 import { log } from './log';
 
-export const provider = new JsonRpcProvider({ url: config.rpcUrl });
+/* Several public endpoints: a rate-limited or failing one hands over to the next. */
+export const provider = new FailoverRpcProvider(
+  config.rpcUrls.map((url) => new JsonRpcProvider({ url }, { retries: 2, wait: 400, backoff: 2 })),
+) as unknown as JsonRpcProvider;
 
 export interface Heir { account_id: string; share_bps: number }
 export interface Status {

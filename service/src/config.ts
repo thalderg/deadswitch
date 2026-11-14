@@ -14,7 +14,11 @@ export const config = {
   telegramToken: env.TELEGRAM_BOT_TOKEN ?? '',
   publicBaseUrl: (env.PUBLIC_BASE_URL ?? 'http://localhost:8787').replace(/\/$/, ''),
   siteUrl: (env.SITE_URL ?? 'http://localhost:5173').replace(/\/$/, ''),
-  rpcUrl: env.RPC_URL ?? 'https://free.rpc.fastnear.com',
+  /* Tried in order; the next one is used when one fails or rate-limits (RPC_URL is kept as a last resort). */
+  rpcUrls: [...new Set([
+    ...(list(env.RPC_URLS).length ? list(env.RPC_URLS) : ['https://near.drpc.org', 'https://rpc.shitzuapes.xyz', 'https://free.rpc.fastnear.com', 'https://rpc.intea.rs']),
+    ...list(env.RPC_URL),
+  ])],
   tokens: list(env.TOKENS ?? 'nep141:wrap.near'),
   demoOffsets: list(env.DEMO_REMINDER_OFFSETS_SECONDS).map(Number).filter((n) => n > 0),
   dryRun: (env.DRY_RUN ?? 'true').toLowerCase() !== 'false',

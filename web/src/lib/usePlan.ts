@@ -20,6 +20,15 @@ export interface Plan {
   clockSkewMs: number;
 }
 
+/* Things that don't change between refreshes: read once per page load. */
+let estateKeyCache: Promise<string> | null = null;
+const accountCache = new Map<string, Promise<boolean>>();
+const cachedEstateKey = () => (estateKeyCache ??= derivedEstateKey().catch((e) => { estateKeyCache = null; throw e; }));
+const cachedExists = (a: string) => {
+  if (!accountCache.has(a)) accountCache.set(a, accountExists(a).then((ok) => { if (!ok) accountCache.delete(a); return ok; }));
+  return accountCache.get(a)!;
+};
+
 export function usePlan() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [error, setError] = useState('');
@@ -31,12 +40,12 @@ export function usePlan() {
       const status = await getStatus();
       const [balances, estateKey, settings] = await Promise.all([
         intentsBalances(status.owner),
-        derivedEstateKey(),
+        cachedEstateKey(),
         service.settings(status.owner).catch(() => null),
       ]);
       const [permission, heirChecks, previews] = await Promise.all([
         hasPublicKey(status.owner, estateKey).catch(() => false),
-        Promise.all(status.heirs.map((h) => accountExists(h.account_id))),
+        Promise.all(status.heirs.map((h) => cachedExists(h.account_id))),
         Promise.all(balances.map((b) => (BigInt(b.amount) > 0n ? previewSweep(b.amount) : Promise.resolve([])))),
       ]);
       setPlan({
@@ -56,7 +65,7 @@ export function usePlan() {
   useEffect(() => { load(); }, [load]);
   /* Keep the plan fresh: chain state changes when reminders check you in. */
   useEffect(() => {
-    const id = setInterval(load, 30_000);
+    const id = setInterval(load, 60_000);
     /* Also when you come back to the tab, e.g. from Telegram or your wallet. */
     const onVisible = () => { if (document.visibilityState === 'visible') load(); };
     document.addEventListener('visibilitychange', onVisible);

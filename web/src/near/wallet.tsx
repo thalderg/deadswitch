@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { NearConnector } from '@hot-labs/near-connect';
-import { NETWORK, RPC_URL } from '../config';
+import { NETWORK, RPC_URLS } from '../config';
 import type { Tx } from './tx';
 
 export interface SignedMessage { accountId: string; publicKey: string; signature: string }
@@ -19,7 +19,7 @@ interface WalletCtx {
 const Ctx = createContext<WalletCtx | undefined>(undefined);
 
 export function WalletProvider({ children }: { children: ReactNode }) {
-  const connector = useMemo(() => new NearConnector({ network: NETWORK, providers: { [NETWORK]: [RPC_URL] } } as never), []);
+  const connector = useMemo(() => new NearConnector({ network: NETWORK, providers: { [NETWORK]: RPC_URLS } } as never), []);
   const [accountId, setAccountId] = useState('');
   const [loading, setLoading] = useState(true);
 

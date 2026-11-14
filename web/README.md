@@ -17,7 +17,7 @@ npm run dev              # http://localhost:5173
 | `VITE_CONTRACT_ID` | `deadswitch.thalderg.near` | The switch contract |
 | `VITE_OPERATOR_ID` | `checkin.thalderg.near` | Check-in operator the settings toggle allows |
 | `VITE_SERVICE_URL` | `http://localhost:8787` | Reminder service |
-| `VITE_RPC_URL` | `https://free.rpc.fastnear.com` | NEAR RPC for read-only calls |
+| `VITE_RPC_URLS` | dRPC, Shitzu, FastNEAR, Intea | NEAR RPC endpoints for read-only calls, tried in order; a failing or rate-limited one hands over to the next |
 | `VITE_TOKENS` | `nep141:wrap.near` | Tokens always shown, besides what `mt_tokens_for_owner` returns |
 
 Other commands: `npm run build` (type-check and production build), `npm test` (unit tests for formatting and share maths).
