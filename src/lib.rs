@@ -1,4 +1,4 @@
-//! Deadswitch v4: crypto inheritance and a panic button on NEAR Intents.
+//! Deadswitch v5: crypto inheritance and a panic button on NEAR Intents.
 //!
 //! The owner keeps their funds in their own NEAR Intents account and registers
 //! one extra key on it: a key derived by NEAR Chain Signatures from this
@@ -18,6 +18,10 @@
 //! - The owner can switch the timer and the panic button on or off later.
 //!   Turning a feature off applies at once; turning one on waits for the
 //!   same change delay.
+//! - Check-in operator (optional): an account the owner allows to reset the
+//!   timer for them, e.g. a reminder service that checks the owner in when
+//!   they tap a link in an email or Telegram message. It pays its own gas,
+//!   can only reset the timer, at most once per interval fixed at deploy.
 
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde_json::{self, json, Value};
@@ -72,6 +76,18 @@ pub struct Status {
     pub change_delay_secs: u64,
     pub pending_testament: Option<PendingTestament>,
     pub pending_modes: Option<PendingModes>,
+    pub checkin_operator: Option<AccountId>,
+    pub pending_operator: Option<PendingOperator>,
+    pub operator_min_interval_secs: u64,
+    pub last_operator_checkin_ns: U128,
+}
+
+/// A check-in operator waiting for the change delay before it can act.
+#[near(serializers = [borsh, json])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingOperator {
+    pub account_id: AccountId,
+    pub effective_ns: U128,
 }
 
 /// A mode change that turns a feature on, waiting for the change delay.
@@ -122,6 +138,12 @@ pub struct Contract {
     /// When the timer last became active; the deadline never starts before it.
     timer_active_since_ns: u64,
     pending_modes: Option<PendingModes>,
+    /// Account allowed to reset the timer for the owner (e.g. a reminder service).
+    checkin_operator: Option<AccountId>,
+    pending_operator: Option<PendingOperator>,
+    /// Minimum time between two operator check-ins. Fixed at deploy.
+    operator_min_interval_ns: u64,
+    last_operator_checkin_ns: u64,
 }
 
 #[near]
@@ -142,6 +164,7 @@ impl Contract {
         timer_enabled: bool,
         panic_enabled: bool,
         change_delay_secs: u64,
+        operator_min_interval_secs: u64,
     ) -> Self {
         require!(timer_enabled || panic_enabled, "Enable the timer, the panic button, or both");
         require!(!timer_enabled || timeout_secs > 0, "timeout_secs must be greater than 0");
@@ -161,6 +184,10 @@ impl Contract {
             pending: None,
             timer_active_since_ns: env::block_timestamp(),
             pending_modes: None,
+            checkin_operator: None,
+            pending_operator: None,
+            operator_min_interval_ns: operator_min_interval_secs * NS_PER_SEC,
+            last_operator_checkin_ns: 0,
         }
     }
 
@@ -229,6 +256,29 @@ impl Contract {
         self.pending_modes = None;
     }
 
+    /// Allows an account to reset the timer for you. It can do nothing else.
+    /// Waits for the change delay, like any change that adds power.
+    pub fn set_checkin_operator(&mut self, account_id: AccountId) {
+        self.owner_check_in();
+        self.apply_pending_operator();
+        require!(account_id != self.owner, "The owner can already check in");
+        if self.change_delay_ns == 0 {
+            self.checkin_operator = Some(account_id);
+            self.pending_operator = None;
+        } else {
+            let effective = env::block_timestamp().saturating_add(self.change_delay_ns);
+            self.pending_operator =
+                Some(PendingOperator { account_id, effective_ns: U128(effective as u128) });
+        }
+    }
+
+    /// Removes the check-in operator, and any pending one, immediately.
+    pub fn remove_checkin_operator(&mut self) {
+        self.owner_check_in();
+        self.checkin_operator = None;
+        self.pending_operator = None;
+    }
+
     /// How long the owner can stay silent before the switch triggers.
     pub fn set_timeout(&mut self, timeout_secs: u64) {
         self.owner_check_in();
@@ -246,6 +296,30 @@ impl Contract {
             "public_key must look like ed25519:<base58>"
         );
         self.estate_public_key = Some(public_key);
+    }
+
+    // ------------------------------------------------------------------
+    // Check-in by the operator (pays its own gas)
+    // ------------------------------------------------------------------
+
+    /// Resets the timer on the owner's behalf, e.g. after they tapped
+    /// "I'm still here" in a reminder. Only the check-in operator can call it,
+    /// only before the switch triggers, and at most once per interval.
+    pub fn operator_check_in(&mut self) {
+        self.apply_pending_operator();
+        require!(
+            self.checkin_operator.as_ref() == Some(&env::predecessor_account_id()),
+            "Only the check-in operator can do this"
+        );
+        require!(!self.is_triggered(), "Switch already triggered; check-ins are closed");
+        let now = env::block_timestamp();
+        require!(
+            self.last_operator_checkin_ns == 0
+                || now >= self.last_operator_checkin_ns.saturating_add(self.operator_min_interval_ns),
+            "Too soon: the operator can check in at most once per interval"
+        );
+        self.last_ping_ns = now;
+        self.last_operator_checkin_ns = now;
     }
 
     // ------------------------------------------------------------------
@@ -425,6 +499,13 @@ impl Contract {
                 .pending_modes
                 .clone()
                 .filter(|m| (env::block_timestamp() as u128) < m.effective_ns.0),
+            checkin_operator: self.effective_operator(),
+            pending_operator: self
+                .pending_operator
+                .clone()
+                .filter(|o| (env::block_timestamp() as u128) < o.effective_ns.0),
+            operator_min_interval_secs: self.operator_min_interval_ns / NS_PER_SEC,
+            last_operator_checkin_ns: U128(self.last_operator_checkin_ns as u128),
         }
     }
 
@@ -461,6 +542,26 @@ impl Contract {
                 (m.timer_enabled, m.panic_enabled, since)
             }
             _ => (self.timer_enabled, self.panic_enabled, self.timer_active_since_ns),
+        }
+    }
+
+    /// The operator in force right now (a pending one counts once its delay has passed).
+    fn effective_operator(&self) -> Option<AccountId> {
+        match &self.pending_operator {
+            Some(o) if (env::block_timestamp() as u128) >= o.effective_ns.0 => {
+                Some(o.account_id.clone())
+            }
+            _ => self.checkin_operator.clone(),
+        }
+    }
+
+    fn apply_pending_operator(&mut self) {
+        let due = self
+            .pending_operator
+            .as_ref()
+            .is_some_and(|o| (env::block_timestamp() as u128) >= o.effective_ns.0);
+        if due {
+            self.checkin_operator = self.pending_operator.take().map(|o| o.account_id);
         }
     }
 
@@ -746,8 +847,12 @@ mod tests {
             timer,
             panic,
             delay_secs,
+            DAY,
         )
     }
+
+    const DAY: u64 = 86_400;
+    const OP: &str = "checkin.deadswitch.near";
 
     fn with_key(c: &mut Contract, now: u64) {
         ctx("thalderg.near", now);
@@ -1200,6 +1305,99 @@ mod tests {
         ctx("anyone.near", T0 + 100 * SEC);
         assert!(!c.status().panic_enabled);
         assert!(c.status().pending_modes.is_none());
+    }
+
+    // --- check-in operator ---
+
+    #[test]
+    fn operator_needs_the_change_delay_then_checks_in() {
+        let mut c = setup_with(true, true, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_checkin_operator(acc(OP));
+        assert!(c.status().checkin_operator.is_none());
+        assert!(c.status().pending_operator.is_some());
+
+        ctx(OP, T0 + 70 * SEC);
+        c.operator_check_in();
+        assert_eq!(c.last_ping_ns, T0 + 70 * SEC);
+        assert_eq!(c.status().checkin_operator, Some(acc(OP)));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the check-in operator")]
+    fn operator_refused_during_the_delay() {
+        let mut c = setup_with(true, true, 60);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_checkin_operator(acc(OP));
+        ctx(OP, T0 + 30 * SEC);
+        c.operator_check_in();
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the check-in operator")]
+    fn stranger_cannot_check_in_for_the_owner() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_checkin_operator(acc(OP));
+        ctx("stranger.near", T0 + 2 * SEC);
+        c.operator_check_in();
+    }
+
+    #[test]
+    #[should_panic(expected = "Too soon")]
+    fn operator_limited_to_once_per_interval() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_checkin_operator(acc(OP));
+        ctx(OP, T0 + 2 * SEC);
+        c.operator_check_in();
+        ctx(OP, T0 + 3 * SEC);
+        c.operator_check_in();
+    }
+
+    #[test]
+    fn operator_can_check_in_again_after_the_interval() {
+        let mut c = setup_with(true, true, 0);
+        ctx("thalderg.near", T0 + SEC);
+        c.set_timeout(3 * DAY);
+        c.set_checkin_operator(acc(OP));
+        ctx(OP, T0 + 2 * SEC);
+        c.operator_check_in();
+        ctx(OP, T0 + 2 * SEC + DAY * SEC);
+        c.operator_check_in();
+        assert_eq!(c.last_ping_ns, T0 + 2 * SEC + DAY * SEC);
+    }
+
+    #[test]
+    #[should_panic(expected = "check-ins are closed")]
+    fn operator_cannot_revive_a_triggered_switch() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_checkin_operator(acc(OP));
+        ctx(OP, T0 + SEC + TIMEOUT * SEC);
+        c.operator_check_in();
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the check-in operator")]
+    fn removing_the_operator_applies_at_once() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_checkin_operator(acc(OP));
+        ctx("thalderg.near", T0 + 2 * SEC);
+        c.remove_checkin_operator();
+        ctx(OP, T0 + 3 * SEC);
+        c.operator_check_in();
+    }
+
+    #[test]
+    fn operator_cannot_do_owner_things() {
+        let mut c = setup();
+        ctx("thalderg.near", T0 + SEC);
+        c.set_checkin_operator(acc(OP));
+        ctx(OP, T0 + 2 * SEC);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| c.ping()));
+        assert!(result.is_err());
     }
 
     #[test]
