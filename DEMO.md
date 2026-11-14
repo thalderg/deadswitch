@@ -1,13 +1,21 @@
 # Deadswitch demo: a real run on NEAR mainnet
 
-A complete run of the plan, from setup to payout, on **NEAR mainnet**, with real funds and the real MPC network. Every step links to its transaction.
+**Why it matters.** In crypto, your capital is at risk every day. More than **$13 billion** was stolen in crypto hacks from 2021 to 2025, and an estimated **2.3 to 3.7 million bitcoin** are lost for good because keys were lost, forgotten or died with their owner ([sources](README.md#deadswitch-a-plan-for-your-crypto-on-near-intents)). Deadswitch gives your crypto a plan: **peace of mind now, and an impact that outlasts you.**
+
+| While you're here | When you're gone |
+| --- | --- |
+| Use your funds as you always do. Trading, swapping and withdrawing keep working. | Everything goes where you want it to go: family, friends, or a cause you care about. |
+| Reminders arrive by email or Telegram. One tap checks you in: no wallet, no fees. | Each person receives their share in their own account, ready to withdraw to their own wallet. |
+| If your keys are ever at risk, one button moves everything to safety. | Your crypto keeps doing good after you, instead of being lost forever. |
+
+Below is a complete run of the plan, from setup to payout, on **NEAR mainnet**, with real funds and the real MPC network. Every step links to its transaction.
 
 - Contract: `deadswitch.thalderg.near` (v5) · Owner: `thalderg.near`
 - People in the plan: `anna.thalderg.near` 60%, `marco.thalderg.near` 40%
 - Check-in operator (the reminder service): `checkin.thalderg.near`
 - Funds, in the owner's own NEAR Intents account: 0.5 NEAR (wNEAR), 0.0999 SOL, 0.00193 ETH
 
-**Video (1:30, no sound, captions only):** [docs/demo/deadswitch-demo.mp4](docs/demo/deadswitch-demo.mp4)
+**Video (1:45, no sound, captions only):** [docs/demo/deadswitch-demo.mp4](docs/demo/deadswitch-demo.mp4)
 
 ---
 

@@ -2,9 +2,22 @@
 
 *Built at NEAR HACKATHON. @NEARProtocol #NEARHackathon*
 
-In crypto, your capital is at risk every day. Keys leak, people get forced to hand over access, wallets get lost, and when a holder dies their coins are often gone forever. The usual fixes are sharing a seed phrase with family or trusting a custodian.
+In crypto, your capital is at risk every day.
 
-**Deadswitch needs neither, and your funds never leave your account.**
+- **Stolen:** more than **$13 billion** was taken in crypto hacks and exploits from 2021 to 2025, according to Chainalysis: over $3 billion in each of 2021 and 2022, $2.2 billion in 2024, and more than $3.4 billion in 2025, $1.5 billion of it in the Bybit hack alone.
+- **Lost:** an estimated **2.3 to 3.7 million bitcoin**, out of 21 million ever, are permanently out of reach because keys or seed phrases were lost, forgotten or died with their owner (a Chainalysis estimate, as reported by Ledger Academy). At $100,000 per bitcoin, that is $230 to $370 billion.
+
+The usual fixes are sharing a seed phrase with family or trusting a custodian.
+
+**Deadswitch needs neither, and your funds never leave your account. It gives your crypto a plan: peace of mind now, and an impact that outlasts you.**
+
+| While you're here | When you're gone |
+| --- | --- |
+| Use your funds as you always do. Trading, swapping and withdrawing keep working. | Everything goes where you want it to go: family, friends, or a cause you care about. |
+| Reminders arrive by email or Telegram, timed to your plan. One tap checks you in: no wallet, no fees. | Each person receives their share in their own account, ready to withdraw to their own wallet. |
+| If your keys are ever at risk, one button moves everything to safety. | Your crypto keeps doing good after you, instead of being lost forever. |
+
+**How:**
 
 - You keep your crypto in **your own NEAR Intents account**, fully available: trade, swap and withdraw whenever you want.
 - You give the switch **one permission**: an extra key on your Intents account that **nobody holds**. Only NEAR's MPC network can sign with it, and only when the Deadswitch contract asks.
@@ -12,7 +25,9 @@ In crypto, your capital is at risk every day. Keys leak, people get forced to ha
 - **If your keys are at risk**, a panic button sends everything to the people in your plan immediately.
 - **We remind you** by email or Telegram before your timer runs out. One tap checks you in: no wallet, no fees.
 
-**[See the full demo on NEAR mainnet →](DEMO.md)**: a real run where nobody checked in and the switch sent NEAR, SOL and ETH to the people in the plan by itself, with every transaction linked and a 90-second captioned video.
+**[See the full demo on NEAR mainnet →](DEMO.md)**: a real run where nobody checked in and the switch sent NEAR, SOL and ETH to the people in the plan by itself, with every transaction linked and a 105-second captioned video.
+
+*Sources: [Chainalysis, 2025 theft report](https://www.chainalysis.com/blog/crypto-hacking-stolen-funds-2026/) · [Chainalysis, 2024 theft report](https://www.chainalysis.com/blog/crypto-hacking-stolen-funds-2025/) · [Ledger Academy, how many bitcoin are lost](https://www.ledger.com/academy/topics/economics-and-regulation/how-many-bitcoin-are-lost-ledger).*
 
 > A hackathon prototype, not a legal will.
 

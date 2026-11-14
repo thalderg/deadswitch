@@ -36,6 +36,38 @@ def card(title, sub=''):
         d.text((W / 2, H / 2 + 60 + i * 54), line, font=sf, fill=MIST, anchor='mm')
     return im
 
+def stats():
+    """Opening card: what is at risk, with sources."""
+    im = Image.new('RGB', (W, H), NIGHT)
+    d = ImageDraw.Draw(im)
+    d.text((W / 2, 170), 'In crypto, your capital is at risk every day.', font=SERIF(72), fill=MOON, anchor='mm')
+    for x, big, small in [(W / 2 - 430, '$13 billion+', 'stolen in crypto hacks, 2021–2025'), (W / 2 + 430, '2.3–3.7 million BTC', 'lost for good: keys lost, forgotten, or gone with their owner')]:
+        d.text((x, 470), big, font=SERIF(96), fill=TIDE, anchor='mm')
+        for i, line in enumerate(wrap(d, small, SANS(38), 700)):
+            d.text((x, 570 + i * 50), line, font=SANS(38), fill=MIST, anchor='mm')
+    d.text((W / 2, 900), 'Sources: Chainalysis theft reports 2024–2025; Chainalysis estimate via Ledger Academy.', font=SANS(28), fill=MIST, anchor='mm')
+    return im
+
+def columns():
+    """Peace of mind now. An impact that outlasts you."""
+    im = Image.new('RGB', (W, H), NIGHT)
+    d = ImageDraw.Draw(im)
+    d.text((W / 2, 140), 'Peace of mind now. An impact that outlasts you.', font=SERIF(68), fill=MOON, anchor='mm')
+    cols = [('While you’re here', ['Use your funds as you always do: trading, swapping and withdrawing keep working.', 'Reminders by email or Telegram. One tap checks you in: no wallet, no fees.', 'If your keys are ever at risk, one button moves everything to safety.']),
+            ('When you’re gone', ['Everything goes where you want: family, friends, or a cause you care about.', 'Each person receives their share in their own account, ready to withdraw.', 'Your crypto keeps doing good after you, instead of being lost forever.'])]
+    for c, (title, items) in enumerate(cols):
+        x0 = 160 + c * 840
+        d.rounded_rectangle((x0, 260, x0 + 760, 960), radius=36, fill=(16, 24, 36), outline=(40, 70, 72), width=2)
+        d.text((x0 + 50, 330), title, font=SERIF(58), fill=MOON, anchor='lm')
+        y = 430
+        for item in items:
+            d.ellipse((x0 + 52, y + 10, x0 + 64, y + 22), fill=TIDE)
+            lines = wrap(d, item, SANS(34), 600)
+            for i, line in enumerate(lines):
+                d.text((x0 + 90, y + i * 46), line, font=SANS(34), fill=MIST, anchor='lt')
+            y += len(lines) * 46 + 50
+    return im
+
 def steps(title, items):
     """A title and numbered steps."""
     im = Image.new('RGB', (W, H), NIGHT)
@@ -89,7 +121,9 @@ d = lambda n: os.path.join(HERE, n)
 s = lambda n: os.path.join(SHOTS, n)
 
 SLIDES = [
+    (stats(), 8),
     (card('Deadswitch', 'A plan for your crypto, on NEAR Intents. A real run on NEAR mainnet.'), 4),
+    (columns(), 9),
     (slide(d('01-landing.png'), 'Your funds stay in your own NEAR Intents account. If anything happens to you or your keys, everything goes exactly where you chose.', (0, 0, 1440, 640)), 6),
     (slide(d('01-landing.png'), 'Every coin you hold flows into one switch. From it grows your plan: the people you chose, a backup wallet, or safety if your keys leak.', (200, 625, 1440, 1235)), 7),
     (slide(d('03-plan-before.png'), 'The owner’s dashboard: 0.5 NEAR, 0.1 SOL and 0.0019 ETH in NEAR Intents. Anna gets 60%, Marco 40%. Everything is in place.'), 7),
