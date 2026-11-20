@@ -26,6 +26,7 @@ What to put in `.env`:
 | `SITE_URL` | The website; also the only non-localhost origin allowed to call the API. |
 | `TOKENS` | Tokens to watch besides what `mt_tokens_for_owner` lists. |
 | `DEMO_REMINDER_OFFSETS_SECONDS` | e.g. `300,120` for the demo. Empty means the real schedule. |
+| `HOST` | Interface to listen on. Default `127.0.0.1` (this machine only); set `0.0.0.0` only to deliberately serve other devices. |
 | `DRY_RUN` | `true` (default): transactions are logged, not sent. Set `false` only when you decide to go live. |
 
 `npm test` runs the unit tests (the schedule, and NEP-413 signature checks). `npm run typecheck` checks types.

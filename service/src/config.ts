@@ -23,6 +23,7 @@ export const config = {
   demoOffsets: list(env.DEMO_REMINDER_OFFSETS_SECONDS).map(Number).filter((n) => n > 0),
   dryRun: (env.DRY_RUN ?? 'true').toLowerCase() !== 'false',
   port: Number(env.PORT ?? 8787),
+  host: env.HOST ?? '127.0.0.1',
   intentsId: 'intents.near',
 };
 

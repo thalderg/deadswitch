@@ -197,6 +197,7 @@ export function startHttp() {
     }
     send(res, 404, { error: 'Not found.' });
   });
-  server.listen(config.port, () => log.info(`HTTP on ${config.publicBaseUrl} (port ${config.port})`));
+  /* Only this machine by default; set HOST=0.0.0.0 to deliberately serve other devices. */
+  server.listen(config.port, config.host, () => log.info(`HTTP on ${config.publicBaseUrl} (listening on ${config.host}:${config.port})`));
 }
 

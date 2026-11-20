@@ -9,3 +9,5 @@ web/dist/
 service/.env
 service/data/
 *.tsbuildinfo
+.DS_Store
+web/.vite/
